@@ -105,7 +105,7 @@ export const RisographCanvas = forwardRef<
       .catch((e) => {
         if (cancelled) return;
         setError(
-          e instanceof Error ? e.message : "画像の読み込みに失敗しました"
+          e instanceof Error ? e.message : "Failed to load image"
         );
         setLoading(false);
       });

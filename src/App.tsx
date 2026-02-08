@@ -8,7 +8,6 @@ import type { RisographColor } from "./lib/risograph";
 import { Download, Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
@@ -57,7 +56,6 @@ const presetEntries = Object.entries(PRESETS);
 
 function App() {
   const [imageSrc, setImageSrc] = useState(SAMPLE_IMAGE);
-  const [urlInput, setUrlInput] = useState("");
   const [colors, setColors] = useState<RisographColor[]>([
     ...PRESETS.cmyk.colors,
   ]);
@@ -101,13 +99,6 @@ function App() {
     if (!file) return;
     const url = URL.createObjectURL(file);
     setImageSrc(url);
-    setUrlInput("");
-  };
-
-  const handleUrlApply = () => {
-    if (urlInput.trim()) {
-      setImageSrc(urlInput.trim());
-    }
   };
 
   return (
@@ -138,32 +129,20 @@ function App() {
         <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
           Image
         </Label>
-        <div className="flex items-center gap-2">
-          <Input
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleUrlApply()}
-            placeholder="https://..."
-            className="h-9 flex-1 font-mono text-xs"
-          />
-          <Button variant="outline" size="sm" onClick={handleUrlApply}>
-            Apply
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            File
-          </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleFileChange}
-            className="hidden"
-          />
-        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          Choose File
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleFileChange}
+          className="hidden"
+        />
       </section>
 
       <Separator className="mb-6" />

@@ -224,7 +224,12 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
-    img.onerror = (e) => reject(e);
+    img.onerror = () =>
+      reject(
+        new Error(
+          "Failed to load image. External URLs may be blocked by CORS policy — try uploading the file instead."
+        )
+      );
     img.src = src;
   });
 }
