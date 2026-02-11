@@ -150,7 +150,7 @@ function App() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-10">
+    <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
       {/* Header */}
       <div className="mb-8 flex items-start justify-between">
         <div>
@@ -223,7 +223,7 @@ function App() {
         <div className="mb-3">
           <Label className="mb-2 text-xs text-muted-foreground">Preset</Label>
           <Select defaultValue="cmyk" onValueChange={handlePresetChange}>
-            <SelectTrigger className="h-8 w-75 text-xs">
+            <SelectTrigger className="h-8 w-full sm:max-w-75 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -257,7 +257,7 @@ function App() {
           ))}
           <div className="flex items-center gap-1.5">
             <Select value={addColorKey} onValueChange={setAddColorKey}>
-              <SelectTrigger className="h-7 w-35 text-xs">
+              <SelectTrigger className="h-7 min-w-0 max-w-35 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="max-h-60">
@@ -284,7 +284,7 @@ function App() {
             </Button>
           </div>
         </div>
-        <div className="mt-3 w-48">
+        <div className="mt-3 sm:w-1/2">
           <Label className="mb-2 text-xs text-muted-foreground">Opacity</Label>
           <Slider
             value={[inkOpacity]}
@@ -302,15 +302,12 @@ function App() {
 
       <Separator className="mb-6" />
 
-      {/* Halftone & Print */}
+      {/* Halftone */}
       <section className="mb-6">
-        <div className="grid grid-cols-5 gap-4">
-          <p className="col-span-3 mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Halftone
-          </p>
-          <p className="col-span-2 mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Print
-          </p>
+        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Halftone
+        </p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <Label className="mb-2 text-xs text-muted-foreground">Mode</Label>
             <Select value={halftoneMode} onValueChange={(v) => setHalftoneMode(v as HalftoneMode)}>
@@ -351,6 +348,15 @@ function App() {
               {density.toFixed(1)}
             </span>
           </div>
+        </div>
+      </section>
+
+      {/* Print */}
+      <section className="mb-6">
+        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Print
+        </p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <Label className="mb-2 text-xs text-muted-foreground">Misregistration</Label>
             <Slider
@@ -383,7 +389,7 @@ function App() {
       </section>
 
       {/* Canvas */}
-      <div className="flex justify-center rounded-xl bg-muted/60 p-6">
+      <div className="flex justify-center rounded-xl bg-muted/60 p-2 sm:p-6">
         <RisographCanvas
           ref={canvasRef}
           src={imageSrc}
