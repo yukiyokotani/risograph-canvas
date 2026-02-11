@@ -108,9 +108,12 @@ function applyFMHalftone(
 
       let maxOpacity = 0;
 
-      // このセルと周囲8セルを確認
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
+      // ドットの影響範囲に応じて探索範囲を動的に決定
+      // サブピクセルサイズではドットのアンチエイリアス領域が
+      // 複数セルにまたがるため、広い範囲を確認する必要がある
+      const searchRange = Math.ceil((dotRadius + edge) / cellSize);
+      for (let dy = -searchRange; dy <= searchRange; dy++) {
+        for (let dx = -searchRange; dx <= searchRange; dx++) {
           const cx = gx + dx;
           const cy = gy + dy;
 
@@ -149,6 +152,10 @@ function applyFMHalftone(
             opacity = 1 - (dist - (dotRadius - edge)) / (2 * edge);
           }
 
+          // 濃度に応じてドットの不透明度を変調
+          // 明部（低濃度）のドットを薄くし、粒の目立ちを抑える
+          opacity *= Math.sqrt(d);
+
           maxOpacity = Math.max(maxOpacity, opacity);
         }
       }
@@ -173,8 +180,9 @@ export function applyHalftone(
   if (options.mode === "fm") {
     return applyFMHalftone(densityMap, width, height, options);
   }
-  // AM モードではドットサイズ変化で濃淡を表現するため +1px シフト
-  const amOptions = { ...options, dotSize: options.dotSize + 1 };
+  // AM モードではドットサイズ変化で濃淡を表現するため +2px シフト
+  const amDotSize = options.dotSize + 2;
+  const amOptions = { ...options, dotSize: amDotSize };
   const result = new Float32Array(width * height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {

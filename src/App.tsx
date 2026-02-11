@@ -65,10 +65,10 @@ function App() {
   const [colors, setColors] = useState<RisographColor[]>([
     ...PRESETS.cmyk.colors,
   ]);
-  const [dotSize, setDotSize] = useState(1);
+  const [dotSize, setDotSize] = useState(0.5);
   const [misregistration, setMisregistration] = useState(2);
-  const [density, setDensity] = useState(1.2);
-  const [inkOpacity, setInkOpacity] = useState(0.7);
+  const [density, setDensity] = useState(1.5);
+  const [inkOpacity, setInkOpacity] = useState(0.75);
   const [paperColor, setPaperColor] = useState("#f5f0e8");
   const [noise, setNoise] = useState(0);
   const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("fm");
@@ -328,13 +328,13 @@ function App() {
             <Slider
               value={[dotSize]}
               onValueChange={([v]) => setDotSize(v)}
-              min={1}
+              min={0.5}
               max={12}
-              step={1}
+              step={0.5}
               className="mt-2"
             />
             <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
-              {dotSize}px
+              {dotSize.toFixed(1)}px
             </span>
           </div>
           <div>
