@@ -331,8 +331,8 @@ function App() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="fm" className="text-xs">FM</SelectItem>
-                <SelectItem value="am" className="text-xs">AM</SelectItem>
+                <SelectItem value="fm" className="text-xs">Dot Density</SelectItem>
+                <SelectItem value="am" className="text-xs">Dot Size</SelectItem>
               </SelectContent>
             </Select>
           </div>
