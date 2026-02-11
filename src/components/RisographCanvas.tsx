@@ -3,6 +3,7 @@ import {
   useEffect,
   useState,
   useImperativeHandle,
+  useCallback,
   forwardRef,
 } from "react";
 import {
@@ -20,35 +21,23 @@ export interface RisographCanvasHandle {
 }
 
 export interface RisographCanvasProps {
-  /** 画像ソースURL */
   src: string;
-  /** スポットカラーの配列 */
   colors: RisographColor[];
-  /** 出力幅 (px)。省略時は画像の元サイズ */
   width?: number;
-  /** 出力高さ (px)。省略時はアスペクト比を維持 */
   height?: number;
-  /** ハーフトーンのドットサイズ (px)。デフォルト: 4 */
   dotSize?: number;
-  /** 版ずれの最大ピクセル量。デフォルト: 2 */
   misregistration?: number;
-  /** ノイズの強度 (0-1)。デフォルト: 0.1 */
   grain?: number;
-  /** 濃度スケール (0.5–2.0)。デフォルト: 1 */
   density?: number;
-  /** インクの不透明度 (0–1)。デフォルト: 0.85 */
   inkOpacity?: number;
-  /** 紙の色 (hex)。省略時はクリーム色 */
   paperColor?: string;
-  /** ハーフトーンモード。"am" = ドットサイズ変化、"fm" = ドット密度変化 */
   halftoneMode?: HalftoneMode;
-  /** 印刷の掠れノイズ (0–0.5)。デフォルト: 0 */
   noise?: number;
-  /** canvas 要素に付与する className */
   className?: string;
-  /** canvas 要素に付与する style */
   style?: React.CSSProperties;
 }
+
+const THROTTLE_MS = 400;
 
 export const RisographCanvas = forwardRef<
   RisographCanvasHandle,
@@ -77,51 +66,38 @@ export const RisographCanvas = forwardRef<
   useImperativeHandle(ref, () => ({
     getCanvas: () => canvasRef.current,
   }));
+
+  const [imageData, setImageData] = useState<ImageData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 画像ロード（src / width / height 変更時のみ）
   useEffect(() => {
     let cancelled = false;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    setLoading(true);
 
     loadImage(src)
       .then((img) => {
         if (cancelled) return;
 
-        // 出力サイズの決定
         let outW = width ?? img.naturalWidth;
         let outH = height ?? img.naturalHeight;
 
-        // 幅のみ指定時はアスペクト比を維持
         if (width && !height) {
           outH = Math.round(
             (img.naturalHeight / img.naturalWidth) * width
           );
         }
-        // 高さのみ指定時もアスペクト比を維持
         if (height && !width) {
           outW = Math.round(
             (img.naturalWidth / img.naturalHeight) * height
           );
         }
 
-        const imageData = getImageData(img, outW, outH);
-
-        processRisograph(imageData, canvas, {
-          colors,
-          dotSize,
-          misregistration,
-          grain,
-          density,
-          inkOpacity,
-          paperColor,
-          halftoneMode,
-          noise,
-        });
-
-        setLoading(false);
+        setImageData(getImageData(img, outW, outH));
         setError(null);
+        setLoading(false);
       })
       .catch((e) => {
         if (cancelled) return;
@@ -134,7 +110,63 @@ export const RisographCanvas = forwardRef<
     return () => {
       cancelled = true;
     };
-  }, [src, colors, width, height, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, noise]);
+  }, [src, width, height]);
+
+  // throttle されたリソグラフ処理
+  const lastRunRef = useRef(0);
+  const pendingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const runProcess = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !imageData) return;
+
+    setProcessing(true);
+    // requestAnimationFrame で描画をまとめる
+    requestAnimationFrame(() => {
+      processRisograph(imageData, canvas, {
+        colors,
+        dotSize,
+        misregistration,
+        grain,
+        density,
+        inkOpacity,
+        paperColor,
+        halftoneMode,
+        noise,
+      });
+      setProcessing(false);
+      lastRunRef.current = Date.now();
+    });
+  }, [imageData, colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, noise]);
+
+  useEffect(() => {
+    if (!imageData) return;
+
+    const now = Date.now();
+    const elapsed = now - lastRunRef.current;
+
+    if (pendingRef.current) {
+      clearTimeout(pendingRef.current);
+    }
+
+    if (elapsed >= THROTTLE_MS) {
+      runProcess();
+    } else {
+      setProcessing(true);
+      pendingRef.current = setTimeout(() => {
+        runProcess();
+        pendingRef.current = null;
+      }, THROTTLE_MS - elapsed);
+    }
+
+    return () => {
+      if (pendingRef.current) {
+        clearTimeout(pendingRef.current);
+      }
+    };
+  }, [runProcess, imageData]);
+
+  const showIndicator = loading || processing;
 
   return (
     <div style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
@@ -150,18 +182,21 @@ export const RisographCanvas = forwardRef<
           ...style,
         }}
       />
-      {loading && (
+      {showIndicator && (
         <div
           style={{
             position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-            color: "#666",
-            fontSize: "14px",
+            top: 8,
+            right: 8,
+            background: "rgba(0,0,0,0.5)",
+            color: "#fff",
+            fontSize: "11px",
+            padding: "3px 8px",
+            borderRadius: "4px",
+            pointerEvents: "none",
           }}
         >
-          Processing...
+          {loading ? "Loading..." : "Processing..."}
         </div>
       )}
       {error && (
