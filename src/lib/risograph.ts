@@ -6,7 +6,9 @@
  */
 
 import { hexToRgb, type RGB } from "./color";
-import { applyHalftone } from "./halftone";
+import { applyHalftone, type HalftoneMode } from "./halftone";
+
+export type { HalftoneMode };
 
 export interface RisographColor {
   /** 色の名前 */
@@ -26,13 +28,51 @@ export interface RisographOptions {
   misregistration: number;
   /** グレイン（ノイズ）の強度 0-1 */
   grain: number;
+  /** 濃度スケール (0.5–2.0)。デフォルト: 1 */
+  density?: number;
+  /** インクの不透明度 (0–1)。デフォルト: 0.85。1=完全不透明(source-over)、0=完全透明(multiply) */
+  inkOpacity?: number;
+  /** 紙の色 (hex)。省略時はデフォルトのクリーム色 */
+  paperColor?: string;
+  /** ハーフトーンモード。"am" = ドットサイズ変化、"fm" = ドット密度変化 */
+  halftoneMode?: HalftoneMode;
+  /** 印刷の掠れノイズ (0–0.5)。各色レイヤーにランダムな欠けを生成。デフォルト: 0 */
+  noise?: number;
+}
+
+/** 掠れノイズ用ハッシュ（セル座標+シード → [0,1)） */
+function scuffHash(x: number, y: number, seed: number): number {
+  let h = (x * 374761393 + y * 668265263 + seed * 1013904223) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = h ^ (h >>> 16);
+  return (h >>> 0) / 4294967296;
+}
+
+/** バイリニア補間付きスムースノイズ (0–1) */
+function smoothNoise(x: number, y: number, cellSize: number, seed: number): number {
+  const gx = Math.floor(x / cellSize);
+  const gy = Math.floor(y / cellSize);
+  const fx = x / cellSize - gx;
+  const fy = y / cellSize - gy;
+
+  const n00 = scuffHash(gx, gy, seed);
+  const n10 = scuffHash(gx + 1, gy, seed);
+  const n01 = scuffHash(gx, gy + 1, seed);
+  const n11 = scuffHash(gx + 1, gy + 1, seed);
+
+  // smoothstep 補間
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+
+  return (n00 * (1 - sx) + n10 * sx) * (1 - sy) +
+         (n01 * (1 - sx) + n11 * sx) * sy;
 }
 
 /** 色ごとのデフォルトスクリーン角度 */
 const DEFAULT_ANGLES = [15, 75, 0, 45, 30, 60, 90, 105];
 
-/** 紙の色 (RGB 0-255) */
-const PAPER: RGB = { r: 245, g: 240, b: 232 };
+/** デフォルトの紙の色 (RGB 0-255) */
+const DEFAULT_PAPER: RGB = { r: 245, g: 240, b: 232 };
 
 /**
  * 非負最小二乗法 (NNLS) による色分解。
@@ -47,7 +87,8 @@ const PAPER: RGB = { r: 245, g: 240, b: 232 };
  */
 function decomposeColors(
   imageData: ImageData,
-  inkRgbs: RGB[]
+  inkRgbs: RGB[],
+  paper: RGB
 ): Float32Array[] {
   const { data, width, height } = imageData;
   const n = inkRgbs.length;
@@ -55,9 +96,9 @@ function decomposeColors(
 
   // 各インクの「吸収ベクトル」: (paper - ink) / 255
   const inkDeltas: [number, number, number][] = inkRgbs.map((ink) => [
-    (PAPER.r - ink.r) / 255,
-    (PAPER.g - ink.g) / 255,
-    (PAPER.b - ink.b) / 255,
+    (paper.r - ink.r) / 255,
+    (paper.g - ink.g) / 255,
+    (paper.b - ink.b) / 255,
   ]);
 
   // 事前計算: 各インクペアのドット積
@@ -88,9 +129,9 @@ function decomposeColors(
     }
 
     // target = (paper - pixel) / 255 × alpha
-    const tr = ((PAPER.r - data[off]) / 255) * alpha;
-    const tg = ((PAPER.g - data[off + 1]) / 255) * alpha;
-    const tb = ((PAPER.b - data[off + 2]) / 255) * alpha;
+    const tr = ((paper.r - data[off]) / 255) * alpha;
+    const tg = ((paper.g - data[off + 1]) / 255) * alpha;
+    const tb = ((paper.b - data[off + 2]) / 255) * alpha;
 
     // 各インクと target のドット積
     const dotInkTarget = new Float64Array(n);
@@ -135,32 +176,44 @@ function decomposeColors(
 
 /**
  * メインのリソグラフ処理。
- * ソースの ImageData を受け取り、リソグラフ風に加工した ImageData を返す。
+ * ソースの ImageData を受け取り、リソグラフ風に加工した結果を canvas に描画する。
+ *
+ * 色分解はホワイト基準で行い、インクは source-over（不透明）で合成する。
+ * これにより暗い紙色でもインクが正しく表示される。
  */
 export function processRisograph(
   sourceData: ImageData,
   canvas: HTMLCanvasElement,
   options: RisographOptions
 ): void {
-  const { colors, dotSize, misregistration, grain } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, noise = 0 } = options;
   const { width, height } = sourceData;
+  const paper = paperColor ? hexToRgb(paperColor) : DEFAULT_PAPER;
 
   canvas.width = width;
   canvas.height = height;
 
   const ctx = canvas.getContext("2d")!;
 
-  // 背景を紙の色で塗りつぶし
-  ctx.fillStyle = `rgb(${PAPER.r},${PAPER.g},${PAPER.b})`;
-  ctx.fillRect(0, 0, width, height);
-
   // インク RGB を取得
   const inkRgbs = colors.map((c) => hexToRgb(c.color));
 
-  // NNLS 色分解: 全色の濃度マップを一括生成
-  const densityMaps = decomposeColors(sourceData, inkRgbs);
+  // 色分解は常にホワイト基準（暗い紙でも正しく濃度マップを生成するため）
+  const WHITE: RGB = { r: 255, g: 255, b: 255 };
+  const densityMaps = decomposeColors(sourceData, inkRgbs, WHITE);
 
-  // 各色レイヤーを処理
+  // 出力バッファを紙の色で初期化
+  const outputData = ctx.createImageData(width, height);
+  const out = outputData.data;
+  for (let i = 0; i < width * height; i++) {
+    const off = i * 4;
+    out[off] = paper.r;
+    out[off + 1] = paper.g;
+    out[off + 2] = paper.b;
+    out[off + 3] = 255;
+  }
+
+  // 各色レイヤーを source-over で合成
   for (let ci = 0; ci < colors.length; ci++) {
     const rgb = inkRgbs[ci];
     const angle =
@@ -170,50 +223,79 @@ export function processRisograph(
     const halftoneMap = applyHalftone(densityMaps[ci], width, height, {
       dotSize,
       angle,
+      density,
+      mode: halftoneMode,
     });
 
-    // このレイヤー用のオフスクリーンキャンバスを作成
-    const layerCanvas = document.createElement("canvas");
-    layerCanvas.width = width;
-    layerCanvas.height = height;
-    const layerCtx = layerCanvas.getContext("2d")!;
-    const layerData = layerCtx.createImageData(width, height);
-
-    for (let i = 0; i < width * height; i++) {
-      const offset = i * 4;
-      let opacity = halftoneMap[i];
-
-      // グレインノイズの追加
-      if (grain > 0) {
-        const noise = (Math.random() - 0.5) * grain;
-        opacity = Math.max(0, Math.min(1, opacity + noise));
+    // 掠れノイズ: 各色レイヤーにランダムな欠けを生成
+    if (noise > 0) {
+      const scuffSize = Math.max(dotSize * 3, 6);
+      const seed = ci * 7919 + 31;
+      for (let i = 0; i < width * height; i++) {
+        if (halftoneMap[i] < 0.004) continue;
+        const px = i % width;
+        const py = (i / width) | 0;
+        const n = smoothNoise(px, py, scuffSize, seed);
+        if (n < noise) {
+          halftoneMap[i] = 0;
+        }
       }
-
-      layerData.data[offset] = rgb.r;
-      layerData.data[offset + 1] = rgb.g;
-      layerData.data[offset + 2] = rgb.b;
-      layerData.data[offset + 3] = Math.round(opacity * 255);
     }
 
-    layerCtx.putImageData(layerData, 0, 0);
-
     // 版ずれ（misregistration）オフセット
-    const offsetX =
+    const ox =
       misregistration > 0
-        ? (Math.random() - 0.5) * 2 * misregistration
+        ? Math.round((Math.random() - 0.5) * 2 * misregistration)
         : 0;
-    const offsetY =
+    const oy =
       misregistration > 0
-        ? (Math.random() - 0.5) * 2 * misregistration
+        ? Math.round((Math.random() - 0.5) * 2 * misregistration)
         : 0;
 
-    // multiply ブレンドで合成
-    ctx.globalCompositeOperation = "multiply";
-    ctx.drawImage(layerCanvas, offsetX, offsetY);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        // 版ずれを考慮したソース座標
+        const srcX = x - ox;
+        const srcY = y - oy;
+        if (srcX < 0 || srcX >= width || srcY < 0 || srcY >= height) continue;
+
+        let opacity = halftoneMap[srcY * width + srcX];
+
+        // グレインノイズの追加
+        if (grain > 0) {
+          opacity = Math.max(
+            0,
+            Math.min(1, opacity + (Math.random() - 0.5) * grain)
+          );
+        }
+
+        if (opacity < 0.004) continue;
+
+        // インク合成 (乗算ブレンド)
+        // 各インクは半透明フィルタとして光を吸収する。
+        // absorption = 1 - ink/255 (各チャンネルの吸収率)
+        // inkOpacity で吸収の強さを調整し、opacity (ドットカバレッジ) で適用範囲を制御。
+        // 乗算は可換なため色の順序に依存しない。
+        const dstOff = (y * width + x) * 4;
+        const prevR = out[dstOff];
+        const prevG = out[dstOff + 1];
+        const prevB = out[dstOff + 2];
+
+        const f = inkOpacity;
+
+        // 透過率: 1 - (ドットカバレッジ × インク濃度 × 吸収率)
+        const tR = 1 - opacity * f * (1 - rgb.r / 255);
+        const tG = 1 - opacity * f * (1 - rgb.g / 255);
+        const tB = 1 - opacity * f * (1 - rgb.b / 255);
+
+        out[dstOff] = Math.round(prevR * tR);
+        out[dstOff + 1] = Math.round(prevG * tG);
+        out[dstOff + 2] = Math.round(prevB * tB);
+      }
+    }
   }
 
-  // 合成モードをリセット
-  ctx.globalCompositeOperation = "source-over";
+  ctx.putImageData(outputData, 0, 0);
 }
 
 /**

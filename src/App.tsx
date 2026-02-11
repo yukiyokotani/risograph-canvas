@@ -4,7 +4,13 @@ import {
   type RisographCanvasHandle,
 } from "./components/RisographCanvas";
 import { RISO_INKS, PRESETS } from "./presets";
-import type { RisographColor } from "./lib/risograph";
+import {
+  processRisograph,
+  loadImage,
+  getImageData,
+  type RisographColor,
+  type HalftoneMode,
+} from "./lib/risograph";
 import { Download, Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -59,21 +65,63 @@ function App() {
   const [colors, setColors] = useState<RisographColor[]>([
     ...PRESETS.cmyk.colors,
   ]);
-  const [dotSize, setDotSize] = useState(2);
-  const [misregistration, setMisregistration] = useState(1.5);
-  const [grain, setGrain] = useState(0.15);
+  const [dotSize, setDotSize] = useState(1);
+  const [misregistration, setMisregistration] = useState(2);
+  const [density, setDensity] = useState(1.2);
+  const [inkOpacity, setInkOpacity] = useState(0.7);
+  const [paperColor, setPaperColor] = useState("#f5f0e8");
+  const [noise, setNoise] = useState(0);
+  const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("fm");
+  const [downloadScale, setDownloadScale] = useState("1");
   const [addColorKey, setAddColorKey] = useState(inkEntries[0][0]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<RisographCanvasHandle>(null);
   const { dark, toggle: toggleTheme } = useTheme();
 
-  const handleDownload = () => {
-    const canvas = canvasRef.current?.getCanvas();
-    if (!canvas) return;
-    const link = document.createElement("a");
-    link.download = "risograph.png";
-    link.href = canvas.toDataURL("image/png");
-    link.click();
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    const scale = Number(downloadScale);
+
+    // 1x: use preview canvas directly
+    if (scale === 1) {
+      const canvas = canvasRef.current?.getCanvas();
+      if (!canvas) return;
+      const link = document.createElement("a");
+      link.download = "risograph.png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+      return;
+    }
+
+    // Higher res: re-render offscreen
+    setDownloading(true);
+    try {
+      const img = await loadImage(imageSrc);
+      const targetWidth = 600 * scale;
+      const targetHeight = Math.round(
+        (img.naturalHeight / img.naturalWidth) * targetWidth
+      );
+      const imageData = getImageData(img, targetWidth, targetHeight);
+      const offscreen = document.createElement("canvas");
+      processRisograph(imageData, offscreen, {
+        colors,
+        dotSize,
+        misregistration,
+        grain: 0,
+        density,
+        inkOpacity,
+        paperColor,
+        halftoneMode,
+        noise,
+      });
+      const link = document.createElement("a");
+      link.download = "risograph.png";
+      link.href = offscreen.toDataURL("image/png");
+      link.click();
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const handlePresetChange = (key: string) => {
@@ -124,7 +172,7 @@ function App() {
         </Button>
       </div>
 
-      {/* Image Source */}
+      {/* Image */}
       <section className="mb-6">
         <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
           Image
@@ -147,14 +195,35 @@ function App() {
 
       <Separator className="mb-6" />
 
-      {/* Controls */}
-      <section className="mb-6 grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-4">
-        <div className="min-w-0">
-          <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
-            Preset
-          </Label>
+      {/* Paper */}
+      <section className="mb-6">
+        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Paper
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            value={paperColor}
+            onChange={(e) => setPaperColor(e.target.value)}
+            className="h-8 w-8 cursor-pointer rounded border border-input bg-transparent p-0.5"
+          />
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {paperColor}
+          </span>
+        </div>
+      </section>
+
+      <Separator className="mb-6" />
+
+      {/* Ink Colors */}
+      <section className="mb-6">
+        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Ink Colors
+        </p>
+        <div className="mb-3">
+          <Label className="mb-2 text-xs text-muted-foreground">Preset</Label>
           <Select defaultValue="cmyk" onValueChange={handlePresetChange}>
-            <SelectTrigger className="h-9 w-full overflow-hidden text-xs">
+            <SelectTrigger className="h-8 w-75 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -166,66 +235,6 @@ function App() {
             </SelectContent>
           </Select>
         </div>
-
-        <div>
-          <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
-            Dot Size
-          </Label>
-          <Slider
-            value={[dotSize]}
-            onValueChange={([v]) => setDotSize(v)}
-            min={2}
-            max={12}
-            step={1}
-            className="mt-2"
-          />
-          <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
-            {dotSize}px
-          </span>
-        </div>
-
-        <div>
-          <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
-            Misregistration
-          </Label>
-          <Slider
-            value={[misregistration]}
-            onValueChange={([v]) => setMisregistration(v)}
-            min={0}
-            max={8}
-            step={0.5}
-            className="mt-2"
-          />
-          <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
-            {misregistration}px
-          </span>
-        </div>
-
-        <div>
-          <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
-            Grain
-          </Label>
-          <Slider
-            value={[grain]}
-            onValueChange={([v]) => setGrain(v)}
-            min={0}
-            max={0.5}
-            step={0.01}
-            className="mt-2"
-          />
-          <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
-            {grain.toFixed(2)}
-          </span>
-        </div>
-      </section>
-
-      <Separator className="mb-6" />
-
-      {/* Color Chips */}
-      <section className="mb-6">
-        <Label className="mb-3 text-xs uppercase tracking-wider text-muted-foreground">
-          Ink Colors
-        </Label>
         <div className="flex flex-wrap items-center gap-2">
           {colors.map((c, i) => (
             <Badge
@@ -246,7 +255,6 @@ function App() {
               </button>
             </Badge>
           ))}
-
           <div className="flex items-center gap-1.5">
             <Select value={addColorKey} onValueChange={setAddColorKey}>
               <SelectTrigger className="h-7 w-35 text-xs">
@@ -276,6 +284,102 @@ function App() {
             </Button>
           </div>
         </div>
+        <div className="mt-3 w-48">
+          <Label className="mb-2 text-xs text-muted-foreground">Opacity</Label>
+          <Slider
+            value={[inkOpacity]}
+            onValueChange={([v]) => setInkOpacity(v)}
+            min={0.1}
+            max={1}
+            step={0.05}
+            className="mt-2"
+          />
+          <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+            {Math.round(inkOpacity * 100)}%
+          </span>
+        </div>
+      </section>
+
+      <Separator className="mb-6" />
+
+      {/* Halftone & Print */}
+      <section className="mb-6">
+        <div className="grid grid-cols-5 gap-4">
+          <p className="col-span-3 mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Halftone
+          </p>
+          <p className="col-span-2 mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Print
+          </p>
+          <div>
+            <Label className="mb-2 text-xs text-muted-foreground">Mode</Label>
+            <Select value={halftoneMode} onValueChange={(v) => setHalftoneMode(v as HalftoneMode)}>
+              <SelectTrigger className="h-9 w-full text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fm" className="text-xs">FM</SelectItem>
+                <SelectItem value="am" className="text-xs">AM</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="mb-2 text-xs text-muted-foreground">Dot Size</Label>
+            <Slider
+              value={[dotSize]}
+              onValueChange={([v]) => setDotSize(v)}
+              min={1}
+              max={12}
+              step={1}
+              className="mt-2"
+            />
+            <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+              {dotSize}px
+            </span>
+          </div>
+          <div>
+            <Label className="mb-2 text-xs text-muted-foreground">Density</Label>
+            <Slider
+              value={[density]}
+              onValueChange={([v]) => setDensity(v)}
+              min={0.5}
+              max={2}
+              step={0.1}
+              className="mt-2"
+            />
+            <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+              {density.toFixed(1)}
+            </span>
+          </div>
+          <div>
+            <Label className="mb-2 text-xs text-muted-foreground">Misregistration</Label>
+            <Slider
+              value={[misregistration]}
+              onValueChange={([v]) => setMisregistration(v)}
+              min={0}
+              max={8}
+              step={0.5}
+              className="mt-2"
+            />
+            <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+              {misregistration}px
+            </span>
+          </div>
+          <div>
+            <Label className="mb-2 text-xs text-muted-foreground">Noise</Label>
+            <Slider
+              value={[noise]}
+              onValueChange={([v]) => setNoise(v)}
+              min={0}
+              max={0.5}
+              step={0.05}
+              className="mt-2"
+            />
+            <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+              {noise.toFixed(2)}
+            </span>
+          </div>
+        </div>
       </section>
 
       {/* Canvas */}
@@ -287,7 +391,12 @@ function App() {
           width={600}
           dotSize={dotSize}
           misregistration={misregistration}
-          grain={grain}
+          grain={0}
+          density={density}
+          inkOpacity={inkOpacity}
+          paperColor={paperColor}
+          halftoneMode={halftoneMode}
+          noise={noise}
           className="shadow-lg"
         />
       </div>
@@ -296,15 +405,28 @@ function App() {
         <p className="text-center text-[11px] text-muted-foreground/70 sm:text-left">
           All processing runs locally in your browser. No images are uploaded or sent to any server.
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          className="shrink-0 gap-1.5"
-          onClick={handleDownload}
-        >
-          <Download className="h-3.5 w-3.5" />
-          Download PNG
-        </Button>
+        <div className="flex items-center justify-center gap-2 sm:justify-end">
+          <Select value={downloadScale} onValueChange={setDownloadScale}>
+            <SelectTrigger className="h-8 w-28 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1" className="text-xs">1x (600px)</SelectItem>
+              <SelectItem value="2" className="text-xs">2x (1200px)</SelectItem>
+              <SelectItem value="4" className="text-xs">4x (2400px)</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 gap-1.5"
+            onClick={handleDownload}
+            disabled={downloading}
+          >
+            <Download className="h-3.5 w-3.5" />
+            {downloading ? "Processing..." : "Download PNG"}
+          </Button>
+        </div>
       </div>
 
       <footer className="mt-10 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground/50">

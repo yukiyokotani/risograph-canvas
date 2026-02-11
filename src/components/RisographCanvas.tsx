@@ -10,9 +10,10 @@ import {
   loadImage,
   getImageData,
   type RisographColor,
+  type HalftoneMode,
 } from "../lib/risograph";
 
-export type { RisographColor };
+export type { RisographColor, HalftoneMode };
 
 export interface RisographCanvasHandle {
   getCanvas: () => HTMLCanvasElement | null;
@@ -33,6 +34,16 @@ export interface RisographCanvasProps {
   misregistration?: number;
   /** ノイズの強度 (0-1)。デフォルト: 0.1 */
   grain?: number;
+  /** 濃度スケール (0.5–2.0)。デフォルト: 1 */
+  density?: number;
+  /** インクの不透明度 (0–1)。デフォルト: 0.85 */
+  inkOpacity?: number;
+  /** 紙の色 (hex)。省略時はクリーム色 */
+  paperColor?: string;
+  /** ハーフトーンモード。"am" = ドットサイズ変化、"fm" = ドット密度変化 */
+  halftoneMode?: HalftoneMode;
+  /** 印刷の掠れノイズ (0–0.5)。デフォルト: 0 */
+  noise?: number;
   /** canvas 要素に付与する className */
   className?: string;
   /** canvas 要素に付与する style */
@@ -51,6 +62,11 @@ export const RisographCanvas = forwardRef<
     dotSize = 4,
     misregistration = 2,
     grain = 0.1,
+    density = 1,
+    inkOpacity = 0.85,
+    paperColor,
+    halftoneMode,
+    noise = 0,
     className,
     style,
   },
@@ -97,6 +113,11 @@ export const RisographCanvas = forwardRef<
           dotSize,
           misregistration,
           grain,
+          density,
+          inkOpacity,
+          paperColor,
+          halftoneMode,
+          noise,
         });
 
         setLoading(false);
@@ -113,7 +134,7 @@ export const RisographCanvas = forwardRef<
     return () => {
       cancelled = true;
     };
-  }, [src, colors, width, height, dotSize, misregistration, grain]);
+  }, [src, colors, width, height, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, noise]);
 
   return (
     <div style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
