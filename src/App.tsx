@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -71,6 +72,7 @@ function App() {
   const [inkOpacity, setInkOpacity] = useState(0.75);
   const [paperColor, setPaperColor] = useState("#f5f0e8");
   const [noise, setNoise] = useState(0);
+  const [transparentBg, setTransparentBg] = useState(false);
   const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("fm");
   const [downloadScale, setDownloadScale] = useState("1");
   const [addColorKey, setAddColorKey] = useState(inkEntries[0][0]);
@@ -114,6 +116,7 @@ function App() {
         paperColor,
         halftoneMode,
         noise,
+        transparentBg,
       });
       const link = document.createElement("a");
       link.download = "risograph.png";
@@ -200,16 +203,29 @@ function App() {
         <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Paper
         </p>
-        <div className="flex items-center gap-2">
-          <input
-            type="color"
-            value={paperColor}
-            onChange={(e) => setPaperColor(e.target.value)}
-            className="h-8 w-8 cursor-pointer rounded border border-input bg-transparent p-0.5"
-          />
-          <span className="font-mono text-[11px] text-muted-foreground">
-            {paperColor}
-          </span>
+        <div className="flex items-center gap-3">
+          <div className="flex w-28 items-center gap-2">
+            <input
+              type="color"
+              value={paperColor}
+              onChange={(e) => setPaperColor(e.target.value)}
+              disabled={transparentBg}
+              className="h-8 w-8 shrink-0 cursor-pointer rounded border border-input bg-transparent p-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+            />
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {transparentBg ? "transparent" : paperColor}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Checkbox
+              id="transparent-bg"
+              checked={transparentBg}
+              onCheckedChange={(v: boolean) => setTransparentBg(v)}
+            />
+            <Label htmlFor="transparent-bg" className="text-xs text-muted-foreground">
+              Transparent
+            </Label>
+          </div>
         </div>
       </section>
 
@@ -403,6 +419,7 @@ function App() {
           paperColor={paperColor}
           halftoneMode={halftoneMode}
           noise={noise}
+          transparentBg={transparentBg}
           className="shadow-lg"
         />
       </div>

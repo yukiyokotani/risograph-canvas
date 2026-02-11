@@ -38,6 +38,8 @@ export interface RisographOptions {
   halftoneMode?: HalftoneMode;
   /** 印刷の掠れノイズ (0–0.5)。各色レイヤーにランダムな欠けを生成。デフォルト: 0 */
   noise?: number;
+  /** 背景を透明にする。インク部分のみ残る */
+  transparentBg?: boolean;
 }
 
 /** 掠れノイズ用ハッシュ（セル座標+シード → [0,1)） */
@@ -186,9 +188,11 @@ export function processRisograph(
   canvas: HTMLCanvasElement,
   options: RisographOptions
 ): void {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, noise = 0 } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, noise = 0, transparentBg = false } = options;
   const { width, height } = sourceData;
   const paper = paperColor ? hexToRgb(paperColor) : DEFAULT_PAPER;
+  // 透明モードでは白紙で合成し、後でアルファを算出
+  const renderPaper = transparentBg ? { r: 255, g: 255, b: 255 } : paper;
 
   canvas.width = width;
   canvas.height = height;
@@ -207,9 +211,9 @@ export function processRisograph(
   const out = outputData.data;
   for (let i = 0; i < width * height; i++) {
     const off = i * 4;
-    out[off] = paper.r;
-    out[off + 1] = paper.g;
-    out[off + 2] = paper.b;
+    out[off] = renderPaper.r;
+    out[off + 1] = renderPaper.g;
+    out[off + 2] = renderPaper.b;
     out[off + 3] = 255;
   }
 
@@ -227,17 +231,32 @@ export function processRisograph(
       mode: halftoneMode,
     });
 
-    // 掠れノイズ: 各色レイヤーにランダムな欠けを生成
+    // 掠れノイズ: インクの色乗りムラをシミュレート
+    // noise パラメータが大きいほど広域な色ムラが広がる
     if (noise > 0) {
-      const scuffSize = Math.max(dotSize * 3, 6);
       const seed = ci * 7919 + 31;
+      // ノイズレベルに応じてムラのスケールを拡大
+      const baseSize = Math.max(dotSize * 4, 8);
+      const scuffSize1 = baseSize * (1 + noise * 8);    // 細かいムラ
+      const scuffSize2 = scuffSize1 * 3;                 // 中域のムラ
+      const scuffSize3 = scuffSize2 * 3;                 // 広域のムラ
       for (let i = 0; i < width * height; i++) {
         if (halftoneMap[i] < 0.004) continue;
         const px = i % width;
         const py = (i / width) | 0;
-        const n = smoothNoise(px, py, scuffSize, seed);
-        if (n < noise) {
-          halftoneMap[i] = 0;
+        // 3オクターブのノイズを合成
+        const n1 = smoothNoise(px, py, scuffSize1, seed);
+        const n2 = smoothNoise(px, py, scuffSize2, seed + 997);
+        const n3 = smoothNoise(px, py, scuffSize3, seed + 2003);
+        const n = n1 * 0.3 + n2 * 0.4 + n3 * 0.3;
+        // 全ピクセルに対して色ムラを適用
+        // n=0.5 が平均で、そこからの偏差で減衰量を決定
+        // noise が大きいほど減衰の振れ幅が大きい
+        const deviation = (0.5 - n) * 2;  // -1 〜 +1
+        if (deviation > 0) {
+          // deviation > 0 の領域で色が薄くなる
+          const attenuation = 1 - deviation * noise * 2;
+          halftoneMap[i] *= Math.max(0, attenuation);
         }
       }
     }
@@ -291,6 +310,36 @@ export function processRisograph(
         out[dstOff] = Math.round(prevR * tR);
         out[dstOff + 1] = Math.round(prevG * tG);
         out[dstOff + 2] = Math.round(prevB * tB);
+      }
+    }
+  }
+
+  // 透明背景モード: 白紙上の乗算結果からアルファとストレートカラーを算出
+  // pixel = 255 * T (T = 透過率) → alpha = 1 - min(T), color = 255 - absorption/alpha
+  if (transparentBg) {
+    for (let i = 0; i < width * height; i++) {
+      const off = i * 4;
+      const r = out[off];
+      const g = out[off + 1];
+      const b = out[off + 2];
+      // 各チャンネルの吸収量 (0-255)
+      const absR = 255 - r;
+      const absG = 255 - g;
+      const absB = 255 - b;
+      const maxAbs = Math.max(absR, absG, absB);
+      if (maxAbs < 1) {
+        // インクなし → 完全透明
+        out[off] = 0;
+        out[off + 1] = 0;
+        out[off + 2] = 0;
+        out[off + 3] = 0;
+      } else {
+        const alpha = maxAbs / 255;
+        // ストレートカラー: absorption / alpha で正規化
+        out[off] = Math.round(255 - absR / alpha);
+        out[off + 1] = Math.round(255 - absG / alpha);
+        out[off + 2] = Math.round(255 - absB / alpha);
+        out[off + 3] = Math.round(alpha * 255);
       }
     }
   }
