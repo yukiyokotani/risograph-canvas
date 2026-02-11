@@ -197,6 +197,9 @@ function App() {
           onChange={handleFileChange}
           className="hidden"
         />
+        <p className="mt-2 text-[11px] text-muted-foreground/70">
+          All processing runs locally in your browser. No images are uploaded or sent to any server.
+        </p>
       </section>
 
       <Separator className="mb-6" />
@@ -440,32 +443,27 @@ function App() {
         />
       </div>
 
-      <div className="mt-4 flex flex-col-reverse items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-center text-[11px] text-muted-foreground/70 sm:text-left">
-          All processing runs locally in your browser. No images are uploaded or sent to any server.
-        </p>
-        <div className="flex items-center justify-center gap-2 sm:justify-end">
-          <Select value={downloadScale} onValueChange={setDownloadScale}>
-            <SelectTrigger className="h-8 w-28 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="1" className="text-xs">1x (600px)</SelectItem>
-              <SelectItem value="2" className="text-xs">2x (1200px)</SelectItem>
-              <SelectItem value="4" className="text-xs">4x (2400px)</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            className="shrink-0 gap-1.5"
-            onClick={handleDownload}
-            disabled={downloading}
-          >
-            <Download className="h-3.5 w-3.5" />
-            {downloading ? "Processing..." : "Download PNG"}
-          </Button>
-        </div>
+      <div className="mt-4 flex items-center justify-center gap-2 sm:justify-end">
+        <Select value={downloadScale} onValueChange={setDownloadScale}>
+          <SelectTrigger className="h-8 w-28 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="1" className="text-xs">1x (600px)</SelectItem>
+            <SelectItem value="2" className="text-xs">2x (1200px)</SelectItem>
+            <SelectItem value="4" className="text-xs">4x (2400px)</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button
+          variant="outline"
+          size="sm"
+          className="shrink-0 gap-1.5"
+          onClick={handleDownload}
+          disabled={downloading}
+        >
+          <Download className="h-3.5 w-3.5" />
+          {downloading ? "Processing..." : "Download PNG"}
+        </Button>
       </div>
 
       <footer className="mt-10 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground/50">
