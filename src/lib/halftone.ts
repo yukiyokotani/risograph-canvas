@@ -19,46 +19,92 @@ export interface HalftoneOptions {
 }
 
 /**
- * AM ハーフトーン: 濃度値 (0-1) をハーフトーンのドット有無に変換する。
- * 指定角度で回転したグリッド上の位置から、
- * そのピクセルがドット内に含まれるかを判定する。
- *
- * @returns 0-1 の値（ドットの不透明度）
+ * AM ハーフトーン: ドット中心の濃度でドットサイズを決定し、常に真円を描画する。
+ * 各ピクセルについて周囲のグリッドセルを探索し、
+ * セル中心の濃度からドット半径を算出してカバレッジを計算する。
  */
-export function halftoneAt(
-  x: number,
-  y: number,
-  density: number,
+function applyAMHalftone(
+  densityMap: Float32Array,
+  width: number,
+  height: number,
   options: HalftoneOptions
-): number {
-  const { dotSize, angle } = options;
+): Float32Array {
+  const { angle } = options;
+  const scale = options.density ?? 1;
+  const result = new Float32Array(width * height);
+
+  const cellSize = options.dotSize + 2;
   const rad = (angle * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
 
-  // 回転座標系に変換
-  const rx = x * cos + y * sin;
-  const ry = -x * sin + y * cos;
+  // アンチエイリアスの縁幅 (ピクセル単位)
+  const edge = 0.5;
 
-  // グリッドセル内での相対位置 (-0.5 ~ 0.5)
-  const cellX = (rx / dotSize) % 1;
-  const cellY = (ry / dotSize) % 1;
-  const cx = cellX - Math.round(cellX);
-  const cy = cellY - Math.round(cellY);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
 
-  // セル中心からの距離（0 ~ ~0.707）
-  const dist = Math.sqrt(cx * cx + cy * cy);
+      // 回転座標系に変換
+      const rx = x * cos + y * sin;
+      const ry = -x * sin + y * cos;
 
-  // 濃度スケールを適用し、ドット半径を決定
-  const scale = options.density ?? 1;
-  const scaled = Math.min(density * scale, 1);
-  const radius = Math.sqrt(scaled) * 0.5;
+      // 回転グリッド上のセル座標
+      const gx = Math.floor(rx / cellSize);
+      const gy = Math.floor(ry / cellSize);
 
-  // ドットの縁をわずかにアンチエイリアス
-  const edge = 0.5 / dotSize;
-  if (dist < radius - edge) return 1;
-  if (dist > radius + edge) return 0;
-  return 1 - (dist - (radius - edge)) / (2 * edge);
+      let maxOpacity = 0;
+
+      // 周囲のセルを探索（最大ドット半径 = 0.5 * cellSize なのでrange=1で十分）
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const cx = gx + dx;
+          const cy = gy + dy;
+
+          // ドット中心（回転座標系）
+          const dotRx = (cx + 0.5) * cellSize;
+          const dotRy = (cy + 0.5) * cellSize;
+
+          // ドット中心を画像座標に逆変換して濃度をサンプリング
+          const imgX = Math.round(dotRx * cos - dotRy * sin);
+          const imgY = Math.round(dotRx * sin + dotRy * cos);
+
+          let d: number;
+          if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
+            d = densityMap[imgY * width + imgX];
+          } else {
+            d = 0;
+          }
+          d = Math.min(d * scale, 1);
+          if (d < 0.001) continue;
+
+          // ドット中心の濃度からドット半径を決定（ピクセル単位）
+          const radius = Math.sqrt(d) * 0.5 * cellSize;
+
+          // ピクセルからドット中心への距離
+          const distX = rx - dotRx;
+          const distY = ry - dotRy;
+          const dist = Math.sqrt(distX * distX + distY * distY);
+
+          if (dist > radius + edge) continue;
+
+          // アンチエイリアスを含む不透明度計算
+          let opacity: number;
+          if (dist < radius - edge) {
+            opacity = 1;
+          } else {
+            opacity = 1 - (dist - (radius - edge)) / (2 * edge);
+          }
+
+          maxOpacity = Math.max(maxOpacity, opacity);
+        }
+      }
+
+      result[idx] = maxOpacity;
+    }
+  }
+
+  return result;
 }
 
 /** セル座標の決定論的ハッシュ → [0, 1) の閾値 */
@@ -93,6 +139,10 @@ function applyFMHalftone(
   // 高濃度でのベタ塗りは solidBlend で処理する
   const dotRadius = dotSize * 0.5;
   const edge = Math.max(0.5, 0.5 / dotSize);
+
+  // サブピクセル透明度補正の強さ (dotRadius < 1px で有効)
+  // dotRadius=0 → 1 (全面補正), dotRadius=1 → 0 (補正なし)
+  const subPixelBlend = Math.max(0, 1 - dotRadius);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -152,9 +202,12 @@ function applyFMHalftone(
             opacity = 1 - (dist - (dotRadius - edge)) / (2 * edge);
           }
 
-          // 濃度に応じてドットの不透明度を変調
-          // 明部（低濃度）のドットを薄くし、粒の目立ちを抑える
-          opacity *= Math.sqrt(d);
+          // サブピクセル補正: ドットが物理的に小さくできない場合、
+          // 透明度で濃度の微細な違いを表現する
+          // dotRadius >= 1px では補正なし（均一濃度）
+          if (subPixelBlend > 0) {
+            opacity *= 1 - subPixelBlend * (1 - Math.sqrt(d));
+          }
 
           maxOpacity = Math.max(maxOpacity, opacity);
         }
@@ -180,16 +233,5 @@ export function applyHalftone(
   if (options.mode === "fm") {
     return applyFMHalftone(densityMap, width, height, options);
   }
-  // AM モードではドットサイズ変化で濃淡を表現するため +2px シフト
-  const amDotSize = options.dotSize + 2;
-  const amOptions = { ...options, dotSize: amDotSize };
-  const result = new Float32Array(width * height);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = y * width + x;
-      const density = densityMap[i];
-      result[i] = halftoneAt(x, y, density, amOptions);
-    }
-  }
-  return result;
+  return applyAMHalftone(densityMap, width, height, options);
 }
