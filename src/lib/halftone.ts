@@ -96,6 +96,12 @@ function applyAMHalftone(
             opacity = 1 - (dist - (radius - edge)) / (2 * edge);
           }
 
+          // ピーク正規化: radius < edge のとき中心でも opacity < 1 になるのを補正
+          if (radius < edge) {
+            const peak = 0.5 + radius / (2 * edge);
+            opacity = Math.min(1, opacity / peak);
+          }
+
           // サブピクセル補正: ドット半径が 1px 未満の場合、
           // 物理的にこれ以上小さくできないため透明度で拡張
           if (radius < 1.0) {
@@ -146,6 +152,10 @@ function applyFMHalftone(
   // 高濃度でのベタ塗りは solidBlend で処理する
   const dotRadius = dotSize * 0.5;
   const edge = Math.max(0.5, 0.5 / dotSize);
+
+  // ドット中心でのピーク不透明度（radius < edge のとき 1.0 未満になる）
+  // 正規化して中心が常に 1.0 になるようにする
+  const peakOpacity = Math.min(1, 0.5 + dotRadius / (2 * edge));
 
   // サブピクセル透明度補正の強さ (dotRadius < 1px で有効)
   // dotRadius=0 → 1 (全面補正), dotRadius=1 → 0 (補正なし)
@@ -207,6 +217,11 @@ function applyFMHalftone(
             opacity = 1;
           } else {
             opacity = 1 - (dist - (dotRadius - edge)) / (2 * edge);
+          }
+
+          // ピーク正規化: radius < edge のとき中心でも opacity < 1 になるのを補正
+          if (peakOpacity < 1) {
+            opacity = Math.min(1, opacity / peakOpacity);
           }
 
           // サブピクセル補正: ドットが物理的に小さくできない場合、
