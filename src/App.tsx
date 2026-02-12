@@ -113,6 +113,10 @@ const guide = {
         heading: "Download",
         body: "Export the result as a PNG image. Choose 1x, 2x, or 4x resolution for higher quality output.",
       },
+      {
+        heading: "License",
+        body: "This tool is free to use. Copyright of the output images belongs to the owner of the original image.",
+      },
     ],
   },
   ja: {
@@ -157,6 +161,10 @@ const guide = {
       {
         heading: "ダウンロード",
         body: "結果をPNG画像として書き出します。1x、2x、4xの解像度を選択して、より高品質な出力が可能です。",
+      },
+      {
+        heading: "ライセンス",
+        body: "本ツールは無料でご利用いただけます。出力画像の著作権は元画像の所有者に帰属します。",
       },
     ],
   },
