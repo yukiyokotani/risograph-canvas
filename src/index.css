@@ -113,6 +113,12 @@
     margin: 0;
     min-width: 320px;
   }
+  button,
+  [role="button"],
+  select,
+  a[href] {
+    cursor: pointer;
+  }
 }
 
 /* Always show scrollbar for sidebar on desktop */

@@ -407,7 +407,7 @@ function App() {
             </Label>
             <Button
               variant="outline"
-              size="sm"
+              className="h-9 text-xs"
               onClick={() => fileInputRef.current?.click()}
             >
               Choose File
@@ -467,7 +467,7 @@ function App() {
             <div className="mb-3">
               <Label className="mb-2 text-xs text-muted-foreground">Preset</Label>
               <Select defaultValue="cmyk" onValueChange={handlePresetChange}>
-                <SelectTrigger className="h-8 w-full text-xs">
+                <SelectTrigger className="h-9 w-full text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -501,7 +501,7 @@ function App() {
               ))}
               <div className="flex items-center gap-1.5">
                 <Select value={addColorKey} onValueChange={setAddColorKey}>
-                  <SelectTrigger className="h-7 min-w-0 max-w-35 text-xs">
+                  <SelectTrigger className="h-9 min-w-0 max-w-35 text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="max-h-60">
@@ -520,8 +520,7 @@ function App() {
                 </Select>
                 <Button
                   variant="outline"
-                  size="sm"
-                  className="h-7 text-xs"
+                  className="h-9 text-xs"
                   onClick={addColor}
                 >
                   + Add
@@ -675,7 +674,7 @@ function App() {
           {/* Download bar: always visible */}
           <div className="mt-4 flex shrink-0 items-center justify-center gap-2 sm:justify-end">
             <Select value={downloadScale} onValueChange={setDownloadScale}>
-              <SelectTrigger className="h-8 w-28 text-xs">
+              <SelectTrigger className="h-9 w-28 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -686,8 +685,7 @@ function App() {
             </Select>
             <Button
               variant="outline"
-              size="sm"
-              className="shrink-0 gap-1.5"
+              className="h-9 shrink-0 gap-1.5 text-xs"
               onClick={handleDownload}
               disabled={downloading}
             >
