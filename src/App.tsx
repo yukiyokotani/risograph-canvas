@@ -34,6 +34,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
 
 function useTheme() {
   const [dark, setDark] = useState(
@@ -68,6 +74,15 @@ const SAMPLE_IMAGE = `${import.meta.env.BASE_URL}sample.jpg`;
 
 const inkEntries = Object.entries(INKS);
 const presetEntries = Object.entries(PRESETS);
+
+const PAPER_COLORS = [
+  { name: "White", color: "#ffffff" },
+  { name: "Cream", color: "#f5f0e8" },
+  { name: "Ivory", color: "#fffff0" },
+  { name: "Kraft", color: "#c4a97d" },
+  { name: "Light Gray", color: "#e8e8e8" },
+  { name: "Black", color: "#1a1a1a" },
+];
 
 const guide = {
   en: {
@@ -171,6 +186,93 @@ const guide = {
 } as const;
 
 type GuideLang = "en" | "ja";
+
+const DEBOUNCE_COLOR_MS = 150;
+
+function PaperColorPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (color: string) => void;
+  disabled?: boolean;
+}) {
+  const [draft, setDraft] = useState(value);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(null);
+
+  // Sync draft when parent value changes (e.g. from preset)
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commit = (color: string) => {
+    setDraft(color);
+    onChange(color);
+    if (timerRef.current) clearTimeout(timerRef.current);
+  };
+
+  const handleDrag = (color: string) => {
+    setDraft(color);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => onChange(color), DEBOUNCE_COLOR_MS);
+  };
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          disabled={disabled}
+          className="h-8 w-8 shrink-0 rounded-full border border-input shadow-sm transition-colors hover:border-ring disabled:cursor-not-allowed disabled:opacity-40"
+          style={{ background: draft }}
+        />
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-3" align="start">
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {PAPER_COLORS.map((pc) => (
+            <button
+              key={pc.color}
+              title={pc.name}
+              onClick={() => commit(pc.color)}
+              className={`h-7 w-7 rounded-full border-2 transition-colors ${draft === pc.color ? "border-ring" : "border-transparent hover:border-input"}`}
+              style={{ background: pc.color }}
+            />
+          ))}
+        </div>
+        <Separator className="mb-2" />
+        <div className="flex items-center gap-2">
+          <label className="relative h-7 w-7 shrink-0 cursor-pointer overflow-hidden rounded-full border border-input">
+            <input
+              type="color"
+              value={draft}
+              onChange={(e) => handleDrag(e.target.value)}
+              className="absolute -inset-1 cursor-pointer opacity-0"
+            />
+            <span
+              className="block h-full w-full rounded-full"
+              style={{ background: draft }}
+            />
+          </label>
+          <Input
+            value={draft}
+            onChange={(e) => {
+              const v = e.target.value;
+              setDraft(v);
+              if (/^#[0-9a-fA-F]{6}$/.test(v)) commit(v);
+            }}
+            onBlur={(e) => {
+              let v = e.target.value.trim();
+              if (!v.startsWith("#")) v = "#" + v;
+              if (/^#[0-9a-fA-F]{6}$/.test(v)) commit(v);
+            }}
+            maxLength={7}
+            className="h-7 flex-1 px-2 font-mono text-xs"
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function App() {
   const [imageSrc, setImageSrc] = useState(SAMPLE_IMAGE);
@@ -432,18 +534,14 @@ function App() {
               Paper
             </p>
             <div className="flex items-center gap-3">
-              <div className="flex w-28 items-center gap-2">
-                <input
-                  type="color"
-                  value={paperColor}
-                  onChange={(e) => setPaperColor(e.target.value)}
-                  disabled={transparentBg}
-                  className="h-8 w-8 shrink-0 cursor-pointer rounded border border-input bg-transparent p-0.5 disabled:cursor-not-allowed disabled:opacity-40"
-                />
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  {transparentBg ? "transparent" : paperColor}
-                </span>
-              </div>
+              <PaperColorPicker
+                value={paperColor}
+                onChange={setPaperColor}
+                disabled={transparentBg}
+              />
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {transparentBg ? "transparent" : paperColor}
+              </span>
               <div className="flex items-center gap-1.5">
                 <Checkbox
                   id="transparent-bg"
