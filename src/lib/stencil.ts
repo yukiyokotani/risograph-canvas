@@ -5,7 +5,7 @@
  * ハーフトーン処理を施して合成する。
  */
 
-import { hexToRgb, type RGB } from "./color";
+import { hexToRgb, luminance, type RGB } from "./color";
 import { applyHalftone, type HalftoneMode } from "./halftone";
 
 export type { HalftoneMode };
@@ -82,8 +82,14 @@ function smoothNoise(x: number, y: number, cellSize: number, seed: number): numb
          (n01 * (1 - sx) + n11 * sx) * sy;
 }
 
-/** 色ごとのデフォルトスクリーン角度 */
-const DEFAULT_ANGLES = [15, 75, 0, 45, 30, 60, 90, 105];
+/**
+ * リソグラフ標準のスクリーン角度（暗い色から順に割り当てる）。
+ *
+ * 網点印刷の定石に倣い、最も暗い（＝最も目立つ）色を 45° に置いて
+ * ギザつき（sawtooth）とモアレを抑え、以降は 30° 間隔でずらす。
+ * 暗い順に 45° → 75° → 15° → 0° を割り当てる（5色目以降は補助角度）。
+ */
+const RISO_SCREEN_ANGLES = [45, 75, 15, 0, 30, 60, 90, 105];
 
 /** デフォルトの紙の色 (RGB 0-255) */
 const DEFAULT_PAPER: RGB = { r: 245, g: 240, b: 232 };
@@ -326,11 +332,25 @@ export function computeStencil(
   // インクカバレッジ蓄積用（アルファ合成で union を取る）
   const alphaMap = new Float32Array(pixelCount);
 
+  // スクリーン角度を色の暗さ順に割り当てる（リソグラフの定石）。
+  // 最も暗い色に 45° を与え、以降は暗い順に RISO_SCREEN_ANGLES を割り当てる。
+  const autoAngles = new Array<number>(colors.length);
+  colors
+    .map((_, i) => i)
+    .sort(
+      (a, b) =>
+        luminance(inkRgbs[a].r, inkRgbs[a].g, inkRgbs[a].b) -
+          luminance(inkRgbs[b].r, inkRgbs[b].g, inkRgbs[b].b) || a - b
+    )
+    .forEach((colorIdx, rank) => {
+      autoAngles[colorIdx] =
+        RISO_SCREEN_ANGLES[rank % RISO_SCREEN_ANGLES.length];
+    });
+
   // 各色レイヤーを乗算で合成（インク同士の減法混色）
   for (let ci = 0; ci < colors.length; ci++) {
     const rgb = inkRgbs[ci];
-    const angle =
-      colors[ci].angle ?? DEFAULT_ANGLES[ci % DEFAULT_ANGLES.length];
+    const angle = colors[ci].angle ?? autoAngles[ci];
 
     // ハーフトーンの適用
     const halftoneMap = applyHalftone(densityMaps[ci], width, height, {
