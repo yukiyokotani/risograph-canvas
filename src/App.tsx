@@ -12,7 +12,18 @@ import {
   type HalftoneMode,
   type ColorMode,
 } from "./lib/stencil";
-import { Download, Info, Moon, RotateCcw, Sun } from "lucide-react";
+import {
+  Download,
+  Info,
+  Maximize,
+  Moon,
+  RotateCcw,
+  Shuffle,
+  Sun,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
+import { usePanZoom } from "./hooks/usePanZoom";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -71,6 +82,52 @@ function useTheme() {
 }
 
 const SAMPLE_IMAGE = `${import.meta.env.BASE_URL}sample.jpg`;
+
+/** プレビューの基準描画幅(px)。ダウンロードの 1x はこの解像度になる。 */
+const BASE_WIDTH = 600;
+
+/**
+ * Canvas を PNG として保存する。
+ *
+ * iOS Safari は `data:` URL + `download` 属性を尊重せず保存できないため、
+ * `toBlob()` + `URL.createObjectURL()` + DOM に追加したアンカーのクリックで
+ * ダウンロードする。タッチ端末では Web Share が使える場合それを優先する。
+ */
+async function saveImageFromCanvas(
+  canvas: HTMLCanvasElement,
+  filename: string
+): Promise<void> {
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/png")
+  );
+  if (!blob) return;
+
+  // タッチ端末（iOS 等）では Web Share が最も確実に保存できる
+  const file = new File([blob], filename, { type: "image/png" });
+  const canShareFile =
+    typeof navigator.canShare === "function" &&
+    navigator.canShare({ files: [file] }) &&
+    window.matchMedia("(pointer: coarse)").matches;
+  if (canShareFile) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    } catch (err) {
+      // ユーザーがキャンセルした場合は二重保存しない
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      // それ以外はフォールバックのダウンロードへ
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 const inkEntries = Object.entries(INKS);
 const presetEntries = Object.entries(PRESETS);
@@ -274,6 +331,86 @@ function PaperColorPicker({
   );
 }
 
+/**
+ * インク色の追加ピッカー。
+ * プリセットのインクパレットを候補として残しつつ、
+ * スペクトラム(ネイティブカラーピッカー)や HEX 入力で任意の色を選べる。
+ */
+function AddInkColorPicker({
+  onAdd,
+}: {
+  onAdd: (color: StencilColor) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [custom, setCustom] = useState("#3366cc");
+
+  const addCustom = () => {
+    let v = custom.trim();
+    if (!v.startsWith("#")) v = "#" + v;
+    if (!/^#[0-9a-fA-F]{6}$/.test(v)) return;
+    const hex = v.toUpperCase();
+    onAdd({ name: hex, color: hex });
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" className="h-9 text-xs">
+          + Add
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-3" align="start">
+        {/* プリセットのインクパレット（候補） */}
+        <div className="mb-2 max-h-40 overflow-y-auto">
+          <div className="flex flex-wrap gap-1.5">
+            {inkEntries.map(([key, ink]) => (
+              <button
+                key={key}
+                title={ink.name}
+                onClick={() => {
+                  onAdd({ ...ink });
+                  setOpen(false);
+                }}
+                className="h-7 w-7 rounded-full border-2 border-transparent shadow-sm transition-colors hover:border-ring"
+                style={{ background: ink.color }}
+              />
+            ))}
+          </div>
+        </div>
+        <Separator className="mb-2" />
+        {/* 任意の色（スペクトラム + HEX） */}
+        <div className="flex items-center gap-2">
+          <label className="relative h-7 w-7 shrink-0 cursor-pointer overflow-hidden rounded-full border border-input">
+            <input
+              type="color"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              className="absolute -inset-1 cursor-pointer opacity-0"
+            />
+            <span
+              className="block h-full w-full rounded-full"
+              style={{ background: custom }}
+            />
+          </label>
+          <Input
+            value={custom}
+            onChange={(e) => setCustom(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addCustom();
+            }}
+            maxLength={7}
+            className="h-7 flex-1 px-2 font-mono text-xs"
+          />
+          <Button size="sm" className="h-7 px-2 text-xs" onClick={addCustom}>
+            Add
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function App() {
   const [imageSrc, setImageSrc] = useState(SAMPLE_IMAGE);
   const [colors, setColors] = useState<StencilColor[]>([
@@ -291,10 +428,10 @@ function App() {
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("cmyk");
-  const [addColorKey, setAddColorKey] = useState("black");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<StencilCanvasHandle>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  const panzoom = usePanZoom(previewRef);
   const { dark, toggle: toggleTheme } = useTheme();
   const [guideLang, setGuideLang] = useState<GuideLang>("en");
 
@@ -348,22 +485,21 @@ function App() {
   const handleDownload = async () => {
     const scale = Number(downloadScale);
 
-    // 1x: use preview canvas directly
+    // 1x: プレビュー Canvas をそのまま保存（＝ベース解像度）
     if (scale === 1) {
       const canvas = canvasRef.current?.getCanvas();
       if (!canvas) return;
-      const link = document.createElement("a");
-      link.download = "stencil.png";
-      link.href = canvas.toDataURL("image/png");
-      link.click();
+      await saveImageFromCanvas(canvas, "stencil.png");
       return;
     }
 
-    // Higher res: Web Worker でオフスレッド処理
+    // 高解像度: Web Worker でオフスレッド処理し、プレビューを忠実にスケールアップ。
+    // renderScale によりドットサイズ・版ずれ等をベースの scale 倍にするため、
+    // 点が細かくなるのではなくプレビューがそのまま高解像度化される。
     setDownloading(true);
     try {
       const img = await loadImage(imageSrc);
-      const targetWidth = 600 * scale;
+      const targetWidth = BASE_WIDTH * scale;
       const targetHeight = Math.round(
         (img.naturalHeight / img.naturalWidth) * targetWidth
       );
@@ -381,6 +517,7 @@ function App() {
         noise,
         transparentBg,
         invert,
+        renderScale: scale,
       };
 
       const pixels = await new Promise<Uint8ClampedArray>((resolve, reject) => {
@@ -412,10 +549,7 @@ function App() {
       output.data.set(pixels);
       ctx.putImageData(output, 0, 0);
 
-      const link = document.createElement("a");
-      link.download = "stencil.png";
-      link.href = offscreen.toDataURL("image/png");
-      link.click();
+      await saveImageFromCanvas(offscreen, "stencil.png");
     } finally {
       setDownloading(false);
     }
@@ -429,11 +563,29 @@ function App() {
     }
   };
 
-  const addColor = () => {
-    const ink = INKS[addColorKey as keyof typeof INKS];
-    if (ink) {
-      setColors((prev) => [...prev, { ...ink }]);
-    }
+  const addColor = (color: StencilColor) => {
+    setColors((prev) => [...prev, color]);
+  };
+
+  /**
+   * 設定をランダムに振る（当たりをつける用）。
+   * インク色は崩壊を避けるためプリセットから自動選択し、
+   * 点のサイズ・濃度・ハーフトーンモード・色分解モードをシャッフルする。
+   */
+  const randomize = () => {
+    const pick = <T,>(arr: readonly T[]): T =>
+      arr[Math.floor(Math.random() * arr.length)];
+
+    // インク色: プリセットから1つ選ぶ（完全ランダムだと崩壊するため）
+    const [key, preset] = pick(presetEntries);
+    setPresetKey(key);
+    setColors([...preset.colors]);
+
+    // 点のサイズ / 濃度 / モード（極端に崩れない範囲で）
+    setDotSize(pick([0.5, 1, 1.5, 2, 3, 4, 6]));
+    setDensity(pick([1, 1.2, 1.4, 1.6, 1.8, 2]));
+    setHalftoneMode(pick<HalftoneMode>(["fm", "am"]));
+    setColorMode(pick<ColorMode>(["natural", "bold"]));
   };
 
   const removeColor = (index: number) => {
@@ -460,6 +612,16 @@ function App() {
           </p>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={randomize}
+            className="h-9 w-9 shrink-0"
+            title="Randomize settings"
+          >
+            <Shuffle className="h-4 w-4" />
+            <span className="sr-only">Randomize settings</span>
+          </Button>
           <Dialog>
             <DialogTrigger asChild>
               <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0">
@@ -623,33 +785,7 @@ function App() {
                   </button>
                 </Badge>
               ))}
-              <div className="flex items-center gap-1.5">
-                <Select value={addColorKey} onValueChange={setAddColorKey}>
-                  <SelectTrigger className="h-9 min-w-0 max-w-35 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-60">
-                    {inkEntries.map(([key, ink]) => (
-                      <SelectItem key={key} value={key} className="text-xs">
-                        <span className="flex items-center gap-2">
-                          <span
-                            className="inline-block h-2.5 w-2.5 rounded-full border border-black/10"
-                            style={{ background: ink.color }}
-                          />
-                          {ink.name}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  variant="outline"
-                  className="h-9 text-xs"
-                  onClick={addColor}
-                >
-                  + Add
-                </Button>
-              </div>
+              <AddInkColorPicker onAdd={addColor} />
             </div>
             <div className="mt-3">
               <Label className="mb-2 text-xs text-muted-foreground">Opacity</Label>
@@ -770,27 +906,100 @@ function App() {
 
         {/* Preview (right on desktop) */}
         <div className="mt-8 lg:mt-0 lg:flex lg:flex-1 lg:min-w-0 lg:flex-col">
-          {/* Canvas area */}
-          <div ref={previewRef} className="grid min-h-0 flex-1 place-items-center rounded-xl bg-muted/60 p-3 lg:p-6">
+          {/* Canvas area (zoom / pan) */}
+          <div
+            ref={previewRef}
+            className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-xl bg-muted/60 p-3 lg:p-6"
+            style={{
+              touchAction: "none",
+              cursor:
+                panzoom.zoom > 1
+                  ? panzoom.dragging
+                    ? "grabbing"
+                    : "grab"
+                  : "default",
+            }}
+            {...panzoom.handlers}
+          >
             {imageAspect ? (
-              <StencilCanvas
-                ref={canvasRef}
-                src={imageSrc}
-                colors={colors}
-                width={Math.round(canvasWidth)}
-                dotSize={dotSize}
-                misregistration={misregistration}
-                grain={0}
-                density={density}
-                inkOpacity={inkOpacity}
-                paperColor={paperColor}
-                halftoneMode={halftoneMode}
-                colorMode={colorMode}
-                noise={noise}
-                transparentBg={transparentBg}
-                invert={invert}
-                className="max-h-full shadow-lg"
-              />
+              <>
+                <div
+                  style={{
+                    transform: panzoom.transform,
+                    transformOrigin: "center center",
+                    willChange: "transform",
+                    lineHeight: 0,
+                  }}
+                >
+                  <StencilCanvas
+                    ref={canvasRef}
+                    src={imageSrc}
+                    colors={colors}
+                    width={BASE_WIDTH}
+                    dotSize={dotSize}
+                    misregistration={misregistration}
+                    grain={0}
+                    density={density}
+                    inkOpacity={inkOpacity}
+                    paperColor={paperColor}
+                    halftoneMode={halftoneMode}
+                    colorMode={colorMode}
+                    noise={noise}
+                    transparentBg={transparentBg}
+                    invert={invert}
+                    className="shadow-lg"
+                    style={{ width: Math.round(canvasWidth), height: "auto" }}
+                  />
+                </div>
+
+                {/* Zoom controls */}
+                <div
+                  className="absolute inset-x-0 bottom-0 flex justify-end p-3"
+                  style={{ pointerEvents: "none" }}
+                >
+                  <div
+                    className="flex items-center gap-0.5 rounded-lg border bg-background/80 p-1 shadow-sm backdrop-blur"
+                    style={{ pointerEvents: "auto" }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    {!panzoom.isDefault && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={panzoom.reset}
+                          aria-label="Reset view"
+                          title="Reset view"
+                        >
+                          <Maximize className="h-4 w-4" />
+                        </Button>
+                        <Separator orientation="vertical" className="mx-0.5 h-4" />
+                      </>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={panzoom.zoomOut}
+                      disabled={!panzoom.canZoomOut}
+                      aria-label="Zoom out"
+                    >
+                      <ZoomOut className="h-4 w-4" />
+                    </Button>
+                    <span className="min-w-[3.5ch] text-center text-xs tabular-nums text-muted-foreground">
+                      {Math.round(panzoom.zoom * 100)}%
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={panzoom.zoomIn}
+                      disabled={!panzoom.canZoomIn}
+                      aria-label="Zoom in"
+                    >
+                      <ZoomIn className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </>
             ) : (
               <span className="text-xs text-muted-foreground">Loading…</span>
             )}
