@@ -12,7 +12,17 @@ import {
   type HalftoneMode,
   type ColorMode,
 } from "./lib/stencil";
-import { Download, Info, Moon, RotateCcw, Sun } from "lucide-react";
+import {
+  Download,
+  Info,
+  Maximize,
+  Moon,
+  RotateCcw,
+  Sun,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
+import { usePanZoom } from "./hooks/usePanZoom";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -71,6 +81,52 @@ function useTheme() {
 }
 
 const SAMPLE_IMAGE = `${import.meta.env.BASE_URL}sample.jpg`;
+
+/** プレビューの基準描画幅(px)。ダウンロードの 1x はこの解像度になる。 */
+const BASE_WIDTH = 600;
+
+/**
+ * Canvas を PNG として保存する。
+ *
+ * iOS Safari は `data:` URL + `download` 属性を尊重せず保存できないため、
+ * `toBlob()` + `URL.createObjectURL()` + DOM に追加したアンカーのクリックで
+ * ダウンロードする。タッチ端末では Web Share が使える場合それを優先する。
+ */
+async function saveImageFromCanvas(
+  canvas: HTMLCanvasElement,
+  filename: string
+): Promise<void> {
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/png")
+  );
+  if (!blob) return;
+
+  // タッチ端末（iOS 等）では Web Share が最も確実に保存できる
+  const file = new File([blob], filename, { type: "image/png" });
+  const canShareFile =
+    typeof navigator.canShare === "function" &&
+    navigator.canShare({ files: [file] }) &&
+    window.matchMedia("(pointer: coarse)").matches;
+  if (canShareFile) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    } catch (err) {
+      // ユーザーがキャンセルした場合は二重保存しない
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      // それ以外はフォールバックのダウンロードへ
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 const inkEntries = Object.entries(INKS);
 const presetEntries = Object.entries(PRESETS);
@@ -295,6 +351,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<StencilCanvasHandle>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  const panzoom = usePanZoom(previewRef);
   const { dark, toggle: toggleTheme } = useTheme();
   const [guideLang, setGuideLang] = useState<GuideLang>("en");
 
@@ -348,22 +405,21 @@ function App() {
   const handleDownload = async () => {
     const scale = Number(downloadScale);
 
-    // 1x: use preview canvas directly
+    // 1x: プレビュー Canvas をそのまま保存（＝ベース解像度）
     if (scale === 1) {
       const canvas = canvasRef.current?.getCanvas();
       if (!canvas) return;
-      const link = document.createElement("a");
-      link.download = "stencil.png";
-      link.href = canvas.toDataURL("image/png");
-      link.click();
+      await saveImageFromCanvas(canvas, "stencil.png");
       return;
     }
 
-    // Higher res: Web Worker でオフスレッド処理
+    // 高解像度: Web Worker でオフスレッド処理し、プレビューを忠実にスケールアップ。
+    // renderScale によりドットサイズ・版ずれ等をベースの scale 倍にするため、
+    // 点が細かくなるのではなくプレビューがそのまま高解像度化される。
     setDownloading(true);
     try {
       const img = await loadImage(imageSrc);
-      const targetWidth = 600 * scale;
+      const targetWidth = BASE_WIDTH * scale;
       const targetHeight = Math.round(
         (img.naturalHeight / img.naturalWidth) * targetWidth
       );
@@ -381,6 +437,7 @@ function App() {
         noise,
         transparentBg,
         invert,
+        renderScale: scale,
       };
 
       const pixels = await new Promise<Uint8ClampedArray>((resolve, reject) => {
@@ -412,10 +469,7 @@ function App() {
       output.data.set(pixels);
       ctx.putImageData(output, 0, 0);
 
-      const link = document.createElement("a");
-      link.download = "stencil.png";
-      link.href = offscreen.toDataURL("image/png");
-      link.click();
+      await saveImageFromCanvas(offscreen, "stencil.png");
     } finally {
       setDownloading(false);
     }
@@ -770,27 +824,100 @@ function App() {
 
         {/* Preview (right on desktop) */}
         <div className="mt-8 lg:mt-0 lg:flex lg:flex-1 lg:min-w-0 lg:flex-col">
-          {/* Canvas area */}
-          <div ref={previewRef} className="grid min-h-0 flex-1 place-items-center rounded-xl bg-muted/60 p-3 lg:p-6">
+          {/* Canvas area (zoom / pan) */}
+          <div
+            ref={previewRef}
+            className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-xl bg-muted/60 p-3 lg:p-6"
+            style={{
+              touchAction: "none",
+              cursor:
+                panzoom.zoom > 1
+                  ? panzoom.dragging
+                    ? "grabbing"
+                    : "grab"
+                  : "default",
+            }}
+            {...panzoom.handlers}
+          >
             {imageAspect ? (
-              <StencilCanvas
-                ref={canvasRef}
-                src={imageSrc}
-                colors={colors}
-                width={Math.round(canvasWidth)}
-                dotSize={dotSize}
-                misregistration={misregistration}
-                grain={0}
-                density={density}
-                inkOpacity={inkOpacity}
-                paperColor={paperColor}
-                halftoneMode={halftoneMode}
-                colorMode={colorMode}
-                noise={noise}
-                transparentBg={transparentBg}
-                invert={invert}
-                className="max-h-full shadow-lg"
-              />
+              <>
+                <div
+                  style={{
+                    transform: panzoom.transform,
+                    transformOrigin: "center center",
+                    willChange: "transform",
+                    lineHeight: 0,
+                  }}
+                >
+                  <StencilCanvas
+                    ref={canvasRef}
+                    src={imageSrc}
+                    colors={colors}
+                    width={BASE_WIDTH}
+                    dotSize={dotSize}
+                    misregistration={misregistration}
+                    grain={0}
+                    density={density}
+                    inkOpacity={inkOpacity}
+                    paperColor={paperColor}
+                    halftoneMode={halftoneMode}
+                    colorMode={colorMode}
+                    noise={noise}
+                    transparentBg={transparentBg}
+                    invert={invert}
+                    className="shadow-lg"
+                    style={{ width: Math.round(canvasWidth), height: "auto" }}
+                  />
+                </div>
+
+                {/* Zoom controls */}
+                <div
+                  className="absolute inset-x-0 bottom-0 flex justify-end p-3"
+                  style={{ pointerEvents: "none" }}
+                >
+                  <div
+                    className="flex items-center gap-0.5 rounded-lg border bg-background/80 p-1 shadow-sm backdrop-blur"
+                    style={{ pointerEvents: "auto" }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    {!panzoom.isDefault && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={panzoom.reset}
+                          aria-label="Reset view"
+                          title="Reset view"
+                        >
+                          <Maximize className="h-4 w-4" />
+                        </Button>
+                        <Separator orientation="vertical" className="mx-0.5 h-4" />
+                      </>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={panzoom.zoomOut}
+                      disabled={!panzoom.canZoomOut}
+                      aria-label="Zoom out"
+                    >
+                      <ZoomOut className="h-4 w-4" />
+                    </Button>
+                    <span className="min-w-[3.5ch] text-center text-xs tabular-nums text-muted-foreground">
+                      {Math.round(panzoom.zoom * 100)}%
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={panzoom.zoomIn}
+                      disabled={!panzoom.canZoomIn}
+                      aria-label="Zoom in"
+                    >
+                      <ZoomIn className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </>
             ) : (
               <span className="text-xs text-muted-foreground">Loading…</span>
             )}

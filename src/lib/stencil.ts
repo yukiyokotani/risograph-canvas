@@ -52,6 +52,17 @@ export interface StencilOptions {
   transparentBg?: boolean;
   /** 入力画像の階調を反転する。暗い紙に明るいインクで刷るときに使用 */
   invert?: boolean;
+  /**
+   * 描画スケール（デフォルト: 1）。プレビューに対する出力解像度の倍率。
+   * ドットサイズ・版ずれ・ノイズなどピクセル単位のパラメータを一律に倍率へ
+   * 比例させ、「プレビューをそのまま高解像度にスケールアップ」した結果を得る。
+   */
+  renderScale?: number;
+  /**
+   * 版ずれ・グレインの疑似乱数シード（デフォルト: 固定値）。
+   * 同じシードならプレビューと出力で版ずれが完全に一致する。
+   */
+  seed?: number;
 }
 
 /** 掠れノイズ用ハッシュ（セル座標+シード → [0,1)） */
@@ -93,6 +104,9 @@ const RISO_SCREEN_ANGLES = [45, 75, 15, 0, 30, 60, 90, 105];
 
 /** デフォルトの紙の色 (RGB 0-255) */
 const DEFAULT_PAPER: RGB = { r: 245, g: 240, b: 232 };
+
+/** 版ずれ・グレインのデフォルトシード。プレビューと出力を一致させるため固定値。 */
+const DEFAULT_SEED = 0x5f3759df;
 
 /**
  * 非負最小二乗法 (NNLS) による色分解。
@@ -245,8 +259,11 @@ export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, noise = 0, transparentBg = false, invert = false } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED } = options;
   const { width, height } = sourceData;
+  // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
+  const scaledDotSize = dotSize * renderScale;
+  const scaledMisreg = misregistration * renderScale;
   const paper = paperColor ? hexToRgb(paperColor) : DEFAULT_PAPER;
 
   // 階調反転: 暗い紙に明るいインクで刷る場合に使用
@@ -352,9 +369,9 @@ export function computeStencil(
     const rgb = inkRgbs[ci];
     const angle = colors[ci].angle ?? autoAngles[ci];
 
-    // ハーフトーンの適用
+    // ハーフトーンの適用（ドットサイズは描画スケールに比例）
     const halftoneMap = applyHalftone(densityMaps[ci], width, height, {
-      dotSize,
+      dotSize: scaledDotSize,
       angle,
       density,
       mode: halftoneMode,
@@ -364,8 +381,8 @@ export function computeStencil(
     // noise パラメータが大きいほど広域な色ムラが広がる
     if (noise > 0) {
       const seed = ci * 7919 + 31;
-      // ノイズレベルに応じてムラのスケールを拡大
-      const baseSize = Math.max(dotSize * 4, 8);
+      // ノイズレベルに応じてムラのスケールを拡大（描画スケールに比例）
+      const baseSize = Math.max(scaledDotSize * 4, 8 * renderScale);
       const scuffSize1 = baseSize * (1 + noise * 8);    // 細かいムラ
       const scuffSize2 = scuffSize1 * 3;                 // 中域のムラ
       const scuffSize3 = scuffSize2 * 3;                 // 広域のムラ
@@ -391,13 +408,15 @@ export function computeStencil(
     }
 
     // 版ずれ（misregistration）オフセット
+    // シード化した決定論的な値を使い、プレビューと出力で完全に一致させる。
+    // 量は描画スケールに比例させる（高解像度でも見た目の版ずれ量は同じ）。
     const ox =
-      misregistration > 0
-        ? Math.round((Math.random() - 0.5) * 2 * misregistration)
+      scaledMisreg > 0
+        ? Math.round((scuffHash(ci, 0, rngSeed) - 0.5) * 2 * scaledMisreg)
         : 0;
     const oy =
-      misregistration > 0
-        ? Math.round((Math.random() - 0.5) * 2 * misregistration)
+      scaledMisreg > 0
+        ? Math.round((scuffHash(ci, 1, rngSeed) - 0.5) * 2 * scaledMisreg)
         : 0;
 
     for (let y = 0; y < height; y++) {
@@ -409,11 +428,11 @@ export function computeStencil(
 
         let opacity = halftoneMap[srcY * width + srcX];
 
-        // グレインノイズの追加
+        // グレインノイズの追加（シード化して決定論的に）
         if (grain > 0) {
           opacity = Math.max(
             0,
-            Math.min(1, opacity + (Math.random() - 0.5) * grain)
+            Math.min(1, opacity + (scuffHash(x, y, rngSeed + 101) - 0.5) * grain)
           );
         }
 
