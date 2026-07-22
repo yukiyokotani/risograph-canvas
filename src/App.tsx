@@ -601,6 +601,36 @@ function App() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:flex lg:h-screen lg:flex-col lg:overflow-hidden lg:py-6">
+      {/* シャッフルボタンのアイコン用: 青紫のアニメーショングラデーション定義 */}
+      <svg
+        aria-hidden="true"
+        width="0"
+        height="0"
+        style={{ position: "absolute" }}
+      >
+        <defs>
+          <linearGradient
+            id="shuffleGrad"
+            gradientUnits="userSpaceOnUse"
+            x1="0"
+            y1="0"
+            x2="24"
+            y2="24"
+          >
+            <stop offset="0%" stopColor="#4f46e5" />
+            <stop offset="50%" stopColor="#a855f7" />
+            <stop offset="100%" stopColor="#4f46e5" />
+            <animateTransform
+              attributeName="gradientTransform"
+              type="rotate"
+              from="0 12 12"
+              to="360 12 12"
+              dur="4s"
+              repeatCount="indefinite"
+            />
+          </linearGradient>
+        </defs>
+      </svg>
       {/* Header */}
       <div className="mb-8 flex items-start justify-between lg:mb-4 lg:shrink-0">
         <div>
@@ -619,7 +649,10 @@ function App() {
             className="h-9 w-9 shrink-0"
             title="Randomize settings"
           >
-            <Shuffle className="h-4 w-4" />
+            <Shuffle
+              className="h-4 w-4"
+              style={{ stroke: "url(#shuffleGrad)" }}
+            />
             <span className="sr-only">Randomize settings</span>
           </Button>
           <Dialog>
@@ -947,7 +980,7 @@ function App() {
                     noise={noise}
                     transparentBg={transparentBg}
                     invert={invert}
-                    className="shadow-lg"
+                    className={transparentBg ? "shadow-lg checkerboard" : "shadow-lg"}
                     style={{ width: Math.round(canvasWidth), height: "auto" }}
                   />
                 </div>

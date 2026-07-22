@@ -121,6 +121,17 @@
   }
 }
 
+/* 透明背景プレビュー用の格子模様（よくある透過インジケータ） */
+.checkerboard {
+  background-color: #ffffff;
+  background-image: repeating-conic-gradient(#cfcfcf 0% 25%, transparent 0% 50%);
+  background-size: 16px 16px;
+}
+.dark .checkerboard {
+  background-color: #1c1c1c;
+  background-image: repeating-conic-gradient(#3a3a3a 0% 25%, transparent 0% 50%);
+}
+
 /* Always show scrollbar for sidebar on desktop */
 @media (min-width: 1024px) {
   .sidebar-scroll {
