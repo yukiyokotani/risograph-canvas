@@ -601,6 +601,37 @@ function App() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:flex lg:h-screen lg:flex-col lg:overflow-hidden lg:py-6">
+      {/* シャッフルボタンのアイコン用: 青紫のアニメーショングラデーション定義 */}
+      <svg
+        aria-hidden="true"
+        width="0"
+        height="0"
+        style={{ position: "absolute" }}
+      >
+        <defs>
+          <linearGradient
+            id="shuffleGrad"
+            gradientUnits="userSpaceOnUse"
+            x1="0"
+            y1="0"
+            x2="16"
+            y2="16"
+            spreadMethod="repeat"
+          >
+            <stop offset="0%" stopColor="#2563eb" />
+            <stop offset="50%" stopColor="#d946ef" />
+            <stop offset="100%" stopColor="#2563eb" />
+            <animateTransform
+              attributeName="gradientTransform"
+              type="translate"
+              from="0 0"
+              to="16 16"
+              dur="1.2s"
+              repeatCount="indefinite"
+            />
+          </linearGradient>
+        </defs>
+      </svg>
       {/* Header */}
       <div className="mb-8 flex items-start justify-between lg:mb-4 lg:shrink-0">
         <div>
@@ -619,7 +650,11 @@ function App() {
             className="h-9 w-9 shrink-0"
             title="Randomize settings"
           >
-            <Shuffle className="h-4 w-4" />
+            <Shuffle
+              className="h-5 w-5"
+              strokeWidth={2.5}
+              style={{ stroke: "url(#shuffleGrad)" }}
+            />
             <span className="sr-only">Randomize settings</span>
           </Button>
           <Dialog>
@@ -947,7 +982,7 @@ function App() {
                     noise={noise}
                     transparentBg={transparentBg}
                     invert={invert}
-                    className="shadow-lg"
+                    className={transparentBg ? "shadow-lg checkerboard" : "shadow-lg"}
                     style={{ width: Math.round(canvasWidth), height: "auto" }}
                   />
                 </div>
