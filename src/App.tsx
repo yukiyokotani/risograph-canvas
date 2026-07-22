@@ -614,18 +614,19 @@ function App() {
             gradientUnits="userSpaceOnUse"
             x1="0"
             y1="0"
-            x2="24"
-            y2="24"
+            x2="16"
+            y2="16"
+            spreadMethod="repeat"
           >
-            <stop offset="0%" stopColor="#4f46e5" />
-            <stop offset="50%" stopColor="#a855f7" />
-            <stop offset="100%" stopColor="#4f46e5" />
+            <stop offset="0%" stopColor="#2563eb" />
+            <stop offset="50%" stopColor="#d946ef" />
+            <stop offset="100%" stopColor="#2563eb" />
             <animateTransform
               attributeName="gradientTransform"
-              type="rotate"
-              from="0 12 12"
-              to="360 12 12"
-              dur="4s"
+              type="translate"
+              from="0 0"
+              to="16 16"
+              dur="1.2s"
               repeatCount="indefinite"
             />
           </linearGradient>
@@ -650,7 +651,8 @@ function App() {
             title="Randomize settings"
           >
             <Shuffle
-              className="h-4 w-4"
+              className="h-5 w-5"
+              strokeWidth={2.5}
               style={{ stroke: "url(#shuffleGrad)" }}
             />
             <span className="sr-only">Randomize settings</span>
