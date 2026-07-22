@@ -18,6 +18,7 @@ import {
   Maximize,
   Moon,
   RotateCcw,
+  Shuffle,
   Sun,
   ZoomIn,
   ZoomOut,
@@ -330,6 +331,86 @@ function PaperColorPicker({
   );
 }
 
+/**
+ * インク色の追加ピッカー。
+ * プリセットのインクパレットを候補として残しつつ、
+ * スペクトラム(ネイティブカラーピッカー)や HEX 入力で任意の色を選べる。
+ */
+function AddInkColorPicker({
+  onAdd,
+}: {
+  onAdd: (color: StencilColor) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [custom, setCustom] = useState("#3366cc");
+
+  const addCustom = () => {
+    let v = custom.trim();
+    if (!v.startsWith("#")) v = "#" + v;
+    if (!/^#[0-9a-fA-F]{6}$/.test(v)) return;
+    const hex = v.toUpperCase();
+    onAdd({ name: hex, color: hex });
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" className="h-9 text-xs">
+          + Add
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-3" align="start">
+        {/* プリセットのインクパレット（候補） */}
+        <div className="mb-2 max-h-40 overflow-y-auto">
+          <div className="flex flex-wrap gap-1.5">
+            {inkEntries.map(([key, ink]) => (
+              <button
+                key={key}
+                title={ink.name}
+                onClick={() => {
+                  onAdd({ ...ink });
+                  setOpen(false);
+                }}
+                className="h-7 w-7 rounded-full border-2 border-transparent shadow-sm transition-colors hover:border-ring"
+                style={{ background: ink.color }}
+              />
+            ))}
+          </div>
+        </div>
+        <Separator className="mb-2" />
+        {/* 任意の色（スペクトラム + HEX） */}
+        <div className="flex items-center gap-2">
+          <label className="relative h-7 w-7 shrink-0 cursor-pointer overflow-hidden rounded-full border border-input">
+            <input
+              type="color"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              className="absolute -inset-1 cursor-pointer opacity-0"
+            />
+            <span
+              className="block h-full w-full rounded-full"
+              style={{ background: custom }}
+            />
+          </label>
+          <Input
+            value={custom}
+            onChange={(e) => setCustom(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addCustom();
+            }}
+            maxLength={7}
+            className="h-7 flex-1 px-2 font-mono text-xs"
+          />
+          <Button size="sm" className="h-7 px-2 text-xs" onClick={addCustom}>
+            Add
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function App() {
   const [imageSrc, setImageSrc] = useState(SAMPLE_IMAGE);
   const [colors, setColors] = useState<StencilColor[]>([
@@ -347,7 +428,6 @@ function App() {
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("cmyk");
-  const [addColorKey, setAddColorKey] = useState("black");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<StencilCanvasHandle>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -483,11 +563,29 @@ function App() {
     }
   };
 
-  const addColor = () => {
-    const ink = INKS[addColorKey as keyof typeof INKS];
-    if (ink) {
-      setColors((prev) => [...prev, { ...ink }]);
-    }
+  const addColor = (color: StencilColor) => {
+    setColors((prev) => [...prev, color]);
+  };
+
+  /**
+   * 設定をランダムに振る（当たりをつける用）。
+   * インク色は崩壊を避けるためプリセットから自動選択し、
+   * 点のサイズ・濃度・ハーフトーンモード・色分解モードをシャッフルする。
+   */
+  const randomize = () => {
+    const pick = <T,>(arr: readonly T[]): T =>
+      arr[Math.floor(Math.random() * arr.length)];
+
+    // インク色: プリセットから1つ選ぶ（完全ランダムだと崩壊するため）
+    const [key, preset] = pick(presetEntries);
+    setPresetKey(key);
+    setColors([...preset.colors]);
+
+    // 点のサイズ / 濃度 / モード（極端に崩れない範囲で）
+    setDotSize(pick([0.5, 1, 1.5, 2, 3, 4, 6]));
+    setDensity(pick([1, 1.2, 1.4, 1.6, 1.8, 2]));
+    setHalftoneMode(pick<HalftoneMode>(["fm", "am"]));
+    setColorMode(pick<ColorMode>(["natural", "bold"]));
   };
 
   const removeColor = (index: number) => {
@@ -514,6 +612,16 @@ function App() {
           </p>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={randomize}
+            className="h-9 w-9 shrink-0"
+            title="Randomize settings"
+          >
+            <Shuffle className="h-4 w-4" />
+            <span className="sr-only">Randomize settings</span>
+          </Button>
           <Dialog>
             <DialogTrigger asChild>
               <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0">
@@ -677,33 +785,7 @@ function App() {
                   </button>
                 </Badge>
               ))}
-              <div className="flex items-center gap-1.5">
-                <Select value={addColorKey} onValueChange={setAddColorKey}>
-                  <SelectTrigger className="h-9 min-w-0 max-w-35 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-60">
-                    {inkEntries.map(([key, ink]) => (
-                      <SelectItem key={key} value={key} className="text-xs">
-                        <span className="flex items-center gap-2">
-                          <span
-                            className="inline-block h-2.5 w-2.5 rounded-full border border-black/10"
-                            style={{ background: ink.color }}
-                          />
-                          {ink.name}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  variant="outline"
-                  className="h-9 text-xs"
-                  onClick={addColor}
-                >
-                  + Add
-                </Button>
-              </div>
+              <AddInkColorPicker onAdd={addColor} />
             </div>
             <div className="mt-3">
               <Label className="mb-2 text-xs text-muted-foreground">Opacity</Label>
