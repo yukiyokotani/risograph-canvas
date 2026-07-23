@@ -411,15 +411,29 @@ function applyBoldTransform(
   const cutHigh = 0.75 - 0.6 * gamutThreshold;
   const cutLow = cutHigh * 0.5;
 
+  // ガモット外カットを適用する明るさの上限（最大インク濃度で判定）。
+  // これ以上インクを要する暗い色は、たとえガモット外でも白飛びさせず、最も近い
+  // インクで残す（例: 青ピンクでの緑の葉は「青」で残す）。カットは主に「ほぼ白の上の
+  // 淡いガモット外の色づき」を掃除する用途に限定する。
+  const GAMUT_KEEP_DARK = 0.3;
+
   // シグモイド正規化: sigmoid(0)=0, sigmoid(1)=1 となるよう再スケール
   const s0 = 1 / (1 + Math.exp(SIGMOID_GAIN * SIGMOID_MID));
   const s1 = 1 / (1 + Math.exp(-SIGMOID_GAIN * (1 - SIGMOID_MID)));
   const sRange = s1 - s0;
 
   for (let p = 0; p < pixelCount; p++) {
-    // Phase 0: 使用インクで表現できない色（残差大）は大胆に非印刷にする
+    let maxD = 0;
+    for (let i = 0; i < n; i++) {
+      if (maps[i][p] > maxD) maxD = maps[i][p];
+    }
+    if (maxD < 0.01) continue;
+
+    // Phase 0: ガモット外（使用インクで作れない色相）を非印刷にする。ただし
+    // 暗い色（GAMUT_KEEP_DARK 以上のインクを要する色）は白飛びさせないため
+    // カット対象外にし、最も近いインクで残す（例: 緑の葉は青で残す）。
     let printFactor = 1;
-    if (residuals) {
+    if (residuals && maxD < GAMUT_KEEP_DARK) {
       const r = residuals[p];
       if (r >= cutHigh) {
         for (let i = 0; i < n; i++) maps[i][p] = 0;
@@ -430,12 +444,6 @@ function applyBoldTransform(
         printFactor = 1 - t * t * (3 - 2 * t); // smoothstep で滑らかにフェード
       }
     }
-
-    let maxD = 0;
-    for (let i = 0; i < n; i++) {
-      if (maps[i][p] > maxD) maxD = maps[i][p];
-    }
-    if (maxD < 0.01) continue;
 
     // Phase 1: 競合抑制 — 支配的なインクを残し、弱いインクを抑制
     for (let i = 0; i < n; i++) {
