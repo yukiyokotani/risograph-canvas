@@ -3,6 +3,7 @@ import type {
   StencilColor,
   HalftoneMode,
   ColorMode,
+  PaperTexture,
 } from "../lib/stencil";
 
 /** 復元対象の設定一式（画像は含めない） */
@@ -17,6 +18,8 @@ export interface StencilSettings {
   colorMode: ColorMode;
   gamutCutoff: number;
   highlightCutoff: number;
+  paperTexture: PaperTexture;
+  paperTextureAmount: number;
   noise: number;
   transparentBg: boolean;
   invert: boolean;

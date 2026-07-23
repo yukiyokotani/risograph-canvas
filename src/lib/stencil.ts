@@ -10,6 +10,8 @@ import { applyHalftone, type HalftoneMode } from "./halftone";
 
 export type { HalftoneMode };
 export type ColorMode = "natural" | "bold";
+/** 紙テクスチャの種類 */
+export type PaperTexture = "none" | "grain" | "fiber" | "recycled";
 
 /** ImageData 互換の軽量インターフェース（Web Worker でも使える） */
 export interface ImageDataLike {
@@ -74,6 +76,10 @@ export interface StencilOptions {
    * 同じシードならプレビューと出力で版ずれが完全に一致する。
    */
   seed?: number;
+  /** 紙テクスチャの種類。デフォルト: "fiber" */
+  paperTexture?: PaperTexture;
+  /** 紙テクスチャの強さ (0–1)。デフォルト: 0.5。0 または type="none" で無効 */
+  paperTextureAmount?: number;
 }
 
 /** 掠れノイズ用ハッシュ（セル座標+シード → [0,1)） */
@@ -102,6 +108,41 @@ function smoothNoise(x: number, y: number, cellSize: number, seed: number): numb
 
   return (n00 * (1 - sx) + n10 * sx) * (1 - sy) +
          (n01 * (1 - sx) + n11 * sx) * sy;
+}
+
+/**
+ * 紙テクスチャの明度モジュレーション（おおよそ -1〜1 の符号付き値）を返す。
+ * すべての特徴サイズを renderScale 倍にすることで、プレビューと出力（高解像度）で
+ * 見た目が一致し、解像度スケールにも比例する。
+ */
+function paperTextureDelta(
+  x: number,
+  y: number,
+  type: PaperTexture,
+  rs: number,
+  seed: number
+): number {
+  if (type === "grain") {
+    // 細かい均一グレイン
+    return (smoothNoise(x, y, Math.max(1.5 * rs, 1), seed + 401) - 0.5) * 2;
+  }
+  if (type === "fiber" || type === "recycled") {
+    // 多重ノイズによる柔らかい繊維ムラ
+    const n =
+      smoothNoise(x, y, 6 * rs, seed + 401) * 0.5 +
+      smoothNoise(x, y, 18 * rs, seed + 421) * 0.35 +
+      smoothNoise(x, y, 60 * rs, seed + 443) * 0.15;
+    let d = (n - 0.5) * 2;
+    if (type === "recycled") {
+      // まばらな斑点（再生紙風）
+      const cell = Math.max(2 * rs, 1);
+      const sh = scuffHash(Math.floor(x / cell), Math.floor(y / cell), seed + 467);
+      if (sh > 0.985) d -= 1.8;
+      else if (sh > 0.975) d += 1.2;
+    }
+    return d;
+  }
+  return 0;
 }
 
 /**
@@ -333,7 +374,7 @@ export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "fiber", paperTextureAmount = 0.5 } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;
@@ -572,15 +613,32 @@ export function computeStencil(
     const pR = paper.r - 255;
     const pG = paper.g - 255;
     const pB = paper.b - 255;
-    // 白紙なら pR=pG=pB=0 で乗算結果がそのまま出る（従来と同等）
-    if (pR !== 0 || pG !== 0 || pB !== 0) {
+    // 紙テクスチャ: 紙が見える部分（インクの無い所）に明度ムラを加える
+    const texOn = paperTexture !== "none" && paperTextureAmount > 0;
+    const texAmp = paperTextureAmount * 18; // amount=1 で ±18 程度の明度振れ
+    // 白紙かつテクスチャ無しなら乗算結果がそのまま出る（従来と同等）
+    if (pR !== 0 || pG !== 0 || pB !== 0 || texOn) {
       for (let i = 0; i < pixelCount; i++) {
         const invA = 1 - alphaMap[i];
         if (invA < 0.004) continue; // 完全カバー → 乗算結果のまま
         const off = i * 4;
-        out[off] = Math.max(0, Math.min(255, Math.round(out[off] + pR * invA)));
-        out[off + 1] = Math.max(0, Math.min(255, Math.round(out[off + 1] + pG * invA)));
-        out[off + 2] = Math.max(0, Math.min(255, Math.round(out[off + 2] + pB * invA)));
+        let addR = pR * invA;
+        let addG = pG * invA;
+        let addB = pB * invA;
+        if (texOn) {
+          const x = i % width;
+          const y = (i / width) | 0;
+          const t =
+            paperTextureDelta(x, y, paperTexture, renderScale, rngSeed) *
+            texAmp *
+            invA;
+          addR += t;
+          addG += t;
+          addB += t * 0.92; // 青みを少し抑えて紙らしい暖色ムラに
+        }
+        out[off] = Math.max(0, Math.min(255, Math.round(out[off] + addR)));
+        out[off + 1] = Math.max(0, Math.min(255, Math.round(out[off + 1] + addG)));
+        out[off + 2] = Math.max(0, Math.min(255, Math.round(out[off + 2] + addB)));
       }
     }
   }

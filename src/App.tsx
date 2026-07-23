@@ -11,6 +11,7 @@ import {
   type StencilOptions,
   type HalftoneMode,
   type ColorMode,
+  type PaperTexture,
 } from "./lib/stencil";
 import {
   Download,
@@ -432,6 +433,8 @@ function App() {
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
   const [gamutCutoff, setGamutCutoff] = useState(0.5);
   const [highlightCutoff, setHighlightCutoff] = useState(0);
+  const [paperTexture, setPaperTexture] = useState<PaperTexture>("fiber");
+  const [paperTextureAmount, setPaperTextureAmount] = useState(0.5);
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("cmyk");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -522,6 +525,8 @@ function App() {
         colorMode,
         gamutThreshold: gamutCutoff,
         highlightCutoff,
+        paperTexture,
+        paperTextureAmount,
         noise,
         transparentBg,
         invert,
@@ -595,6 +600,8 @@ function App() {
     setHalftoneMode(pick<HalftoneMode>(["fm", "am"]));
     setColorMode(pick<ColorMode>(["natural", "bold"]));
     setGamutCutoff(pick([0.3, 0.5, 0.7]));
+    setPaperTexture(pick<PaperTexture>(["fiber", "recycled", "grain", "none"]));
+    setPaperTextureAmount(pick([0.3, 0.5, 0.7]));
   };
 
   // 「最近使った設定」（localStorage）。明示的な保存ではなくサジェスト用。
@@ -609,6 +616,8 @@ function App() {
     colorMode,
     gamutCutoff,
     highlightCutoff,
+    paperTexture,
+    paperTextureAmount,
     noise,
     transparentBg,
     invert,
@@ -626,6 +635,8 @@ function App() {
     setColorMode(s.colorMode);
     setGamutCutoff(s.gamutCutoff);
     setHighlightCutoff(s.highlightCutoff);
+    setPaperTexture(s.paperTexture);
+    setPaperTextureAmount(s.paperTextureAmount);
     setNoise(s.noise);
     setTransparentBg(s.transparentBg);
     setInvert(s.invert);
@@ -853,6 +864,44 @@ function App() {
                   Transparent
                 </Label>
               </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div>
+                <Label className="mb-2 text-xs text-muted-foreground">Texture</Label>
+                <Select
+                  value={paperTexture}
+                  onValueChange={(v) => setPaperTexture(v as PaperTexture)}
+                  disabled={transparentBg}
+                >
+                  <SelectTrigger className="h-9 w-full text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none" className="text-xs">None</SelectItem>
+                    <SelectItem value="grain" className="text-xs">Grain</SelectItem>
+                    <SelectItem value="fiber" className="text-xs">Fiber</SelectItem>
+                    <SelectItem value="recycled" className="text-xs">Recycled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {paperTexture !== "none" && (
+                <div>
+                  <Label className="mb-2 text-xs text-muted-foreground">
+                    Texture amount
+                  </Label>
+                  <Slider
+                    value={[paperTextureAmount]}
+                    onValueChange={([v]) => setPaperTextureAmount(v)}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    className="mt-2"
+                  />
+                  <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+                    {Math.round(paperTextureAmount * 100)}%
+                  </span>
+                </div>
+              )}
             </div>
           </section>
 
@@ -1103,6 +1152,8 @@ function App() {
                     colorMode={colorMode}
                     gamutThreshold={gamutCutoff}
                     highlightCutoff={highlightCutoff}
+                    paperTexture={paperTexture}
+                    paperTextureAmount={paperTextureAmount}
                     noise={noise}
                     transparentBg={transparentBg}
                     invert={invert}
