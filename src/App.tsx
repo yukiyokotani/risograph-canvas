@@ -178,14 +178,6 @@ const guide = {
         body: "How the image is split into ink layers.\n• Natural — reproduces the original colors. Saturated colors the inks can't mix (e.g. green with blue+pink) resolve to the nearest single ink instead of a muddy overlap, keeping them clean and bright. Best for photographic gradients.\n• Bold — punchier, high-contrast separation for a graphic look (see Separation strength).",
       },
       {
-        heading: "Separation strength",
-        body: "Only active with Bold. Sets how hard out-of-gamut colors snap toward a single ink instead of mixing. Higher values give cleaner, more posterized single-ink areas; lower values keep more two-ink blending. Neutrals, in-gamut colors, and deep shadows always keep both inks. No effect in Natural.",
-      },
-      {
-        heading: "Black generation",
-        body: "Only shown when the palette includes a black or gray ink. Like real printing (GCR), the neutral/gray part of an image is carried by the black ink instead of muddy overlaps of the colored inks — so grays and shadows stay clean while saturated colors keep their vibrancy (no black is added to them). Higher values put more of the neutral tone into black; 0 uses almost no black.",
-      },
-      {
         heading: "Halftone Mode",
         body: "How tone is rendered.\n• Dot Size — dots sit on a regular grid and grow larger in darker areas (classic AM halftone). Gradients are carried by smooth dot-size modulation.\n• Dot Density — fixed-size dots placed by probability; darker areas get more dots (stochastic / FM screening).",
       },
@@ -198,8 +190,12 @@ const guide = {
         body: "Overall ink amount. Higher values print darker and more saturated; in Dot Size mode the darkest areas fill in more (dots merge toward solid).",
       },
       {
-        heading: "Highlight cutoff",
-        body: "Drops the faintest tones below the threshold so near-white areas stay clean (removes stray dots from JPEG noise or anti-aliasing). Tones above the threshold are remapped so dots still grow from tiny — the highlight gradient stays size-modulated rather than turning into scattered dots.",
+        heading: "Separation strength",
+        body: "Only active with Bold. Sets how hard out-of-gamut colors snap toward a single ink instead of mixing. Higher values give cleaner, more posterized single-ink areas; lower values keep more two-ink blending. Neutrals, in-gamut colors, and deep shadows always keep both inks. No effect in Natural.",
+      },
+      {
+        heading: "Black generation",
+        body: "Only shown when the palette includes a black or gray ink. Like real printing (GCR), the neutral/gray part of an image is carried by the black ink instead of muddy overlaps of the colored inks — so grays and shadows stay clean while saturated colors keep their vibrancy (no black is added to them). Higher values put more of the neutral tone into black; 0 uses almost no black.",
       },
       {
         heading: "Misregistration",
@@ -208,6 +204,10 @@ const guide = {
       {
         heading: "Noise",
         body: "Adds ink scuffing and uneven coverage typical of real stencil prints. Higher values create broader, more visible unevenness.",
+      },
+      {
+        heading: "Highlight cutoff",
+        body: "Drops the faintest tones below the threshold so near-white areas stay clean (removes stray dots from JPEG noise or anti-aliasing). Tones above the threshold are remapped so dots still grow from tiny — the highlight gradient stays size-modulated rather than turning into scattered dots.",
       },
       {
         heading: "Toolbar",
@@ -247,14 +247,6 @@ const guide = {
         body: "画像をインクの色版にどう分解するかを制御します。\n• Natural — 元の色を忠実に再現します。インクで混色できない鮮やかな色（例: 青+ピンクでの緑）は、濁った重なりにせず最も近い単色インクへ寄せて、澄んだ発色を保ちます。写真的なグラデーション向き。\n• Bold — コントラストの高いグラフィカルな色分離（下の Separation strength 参照）。",
       },
       {
-        heading: "分離の強さ (Separation strength)",
-        body: "Bold でのみ有効です。ガモット外の色をどれだけ強く単色へ寄せる（混色させない）かを決めます。値を大きくするほどクリーンでポスター調の単色域になり、小さいほど2色の混色を残します。中立色・ガモット内の色・深い影は常に2色を保ちます。Natural では効果はありません。",
-      },
-      {
-        heading: "黒生成 (Black generation)",
-        body: "黒またはグレーのインクを含む構成のときだけ表示されます。実際の印刷（GCR）と同じく、画像の中立（グレー）な部分を、有彩色インクの濁った重なりではなく黒インクで表現します。これでグレーや影はクリーンに締まり、鮮やかな色には黒を入れないので発色はそのまま保たれます。値を大きくするほど中立部を多く黒へ置き換え、0 ではほぼ黒を使いません。",
-      },
-      {
         heading: "ハーフトーンモード",
         body: "濃淡の表現方法を決めます。\n• Dot Size — 点が規則格子に並び、暗い部分ほど点が大きくなります（従来型 AM 網点）。階調は滑らかなドットサイズ変調で表現されます。\n• Dot Density — 点のサイズは固定で、暗い部分ほど点の密度が上がります（確率的 / FM スクリーニング）。",
       },
@@ -267,8 +259,12 @@ const guide = {
         body: "インク全体量のスケールです。高いほど濃く彩度が上がります。Dot Size モードでは最暗部がより詰まり、点が融合してベタに近づきます。",
       },
       {
-        heading: "ハイライトのクリップ (Highlight cutoff)",
-        body: "しきい値未満のごく薄い階調を落として、ほぼ白の領域を綺麗に保ちます（JPEG ノイズや反アリアス由来の網点の散りを除去）。しきい値以上は再マップされ、点がゼロから滑らかに育つため、ハイライトの勾配が「点の散り」ではなくサイズ変調で表現されます。",
+        heading: "分離の強さ (Separation strength)",
+        body: "Bold でのみ有効です。ガモット外の色をどれだけ強く単色へ寄せる（混色させない）かを決めます。値を大きくするほどクリーンでポスター調の単色域になり、小さいほど2色の混色を残します。中立色・ガモット内の色・深い影は常に2色を保ちます。Natural では効果はありません。",
+      },
+      {
+        heading: "黒生成 (Black generation)",
+        body: "黒またはグレーのインクを含む構成のときだけ表示されます。実際の印刷（GCR）と同じく、画像の中立（グレー）な部分を、有彩色インクの濁った重なりではなく黒インクで表現します。これでグレーや影はクリーンに締まり、鮮やかな色には黒を入れないので発色はそのまま保たれます。値を大きくするほど中立部を多く黒へ置き換え、0 ではほぼ黒を使いません。",
       },
       {
         heading: "版ずれ (Misregistration)",
@@ -277,6 +273,10 @@ const guide = {
       {
         heading: "ノイズ (Noise)",
         body: "実際のステンシル印刷に見られるインクの掠れや色ムラを加えます。値を大きくするほど広範囲にムラが現れます。",
+      },
+      {
+        heading: "ハイライトのクリップ (Highlight cutoff)",
+        body: "しきい値未満のごく薄い階調を落として、ほぼ白の領域を綺麗に保ちます（JPEG ノイズや反アリアス由来の網点の散りを除去）。しきい値以上は再マップされ、点がゼロから滑らかに育つため、ハイライトの勾配が「点の散り」ではなくサイズ変調で表現されます。",
       },
       {
         heading: "ツールバー (Toolbar)",
