@@ -623,12 +623,12 @@ function App() {
             y2="0"
             spreadMethod="repeat"
           >
-            {/* 青→紫→モーヴ(淡ピンク)。0% と 100% を同色にして継ぎ目なくループ（シアンなし） */}
-            <stop offset="0%" stopColor="#4a6ea8" />
-            <stop offset="25%" stopColor="#7e78c0" />
-            <stop offset="50%" stopColor="#c99ed6" />
-            <stop offset="75%" stopColor="#7e78c0" />
-            <stop offset="100%" stopColor="#4a6ea8" />
+            {/* 青→紫→モーヴ(淡ピンク)。0% と 100% を同色にして継ぎ目なくループ（シアンなし、鮮やかめ） */}
+            <stop offset="0%" stopColor="#3568d8" />
+            <stop offset="25%" stopColor="#7d5fe8" />
+            <stop offset="50%" stopColor="#c85fda" />
+            <stop offset="75%" stopColor="#7d5fe8" />
+            <stop offset="100%" stopColor="#3568d8" />
             <animateTransform
               attributeName="gradientTransform"
               type="translate"
