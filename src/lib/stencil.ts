@@ -395,7 +395,12 @@ function applyBoldTransform(
   const n = maps.length;
   if (n === 0) return;
 
-  const SUPPRESSION_POWER = 2.0;
+  // 競合抑制の強さ。大きいほど従属インクを強く殺す。
+  // 2.0 は殺しすぎで、従属インク（例: 青地の上の赤）が「勝つ場所にだけ現れる
+  // パッチ＝密度表現」になり、グラデーションがドットサイズ変調で滑らかに出ない。
+  // 0.6 に緩めて従属インクを残し、滑らかなサイズ変調グラデーションを保つ。
+  // Bold らしさ（色分離の強さ）はシグモイドとガモット外カットが担うため維持される。
+  const SUPPRESSION_POWER = 0.6;
   const SIGMOID_GAIN = 6.0;
   const SIGMOID_MID = 0.35;
 
