@@ -197,6 +197,8 @@ export const StencilCanvas = forwardRef<
             background: "rgba(0,0,0,0.5)",
             color: "#fff",
             fontSize: "11px",
+            lineHeight: 1.4,
+            whiteSpace: "nowrap",
             padding: "3px 8px",
             borderRadius: "4px",
             pointerEvents: "none",
@@ -211,6 +213,7 @@ export const StencilCanvas = forwardRef<
             padding: "20px",
             color: "#c00",
             fontSize: "14px",
+            lineHeight: 1.5,
             textAlign: "center",
           }}
         >

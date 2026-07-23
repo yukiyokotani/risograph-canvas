@@ -619,7 +619,7 @@ function App() {
             spreadMethod="repeat"
           >
             <stop offset="0%" stopColor="#2563eb" />
-            <stop offset="50%" stopColor="#d946ef" />
+            <stop offset="50%" stopColor="#7e22ce" />
             <stop offset="100%" stopColor="#2563eb" />
             <animateTransform
               attributeName="gradientTransform"
