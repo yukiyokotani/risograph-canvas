@@ -4,6 +4,7 @@ import {
   type StencilCanvasHandle,
 } from "./components/StencilCanvas";
 import { INKS, PRESETS } from "./presets";
+import { hexToRgb, rgbToLab } from "./lib/color";
 import {
   loadImage,
   getImageData,
@@ -181,6 +182,10 @@ const guide = {
         body: "Only active with Bold. Sets how hard out-of-gamut colors snap toward a single ink instead of mixing. Higher values give cleaner, more posterized single-ink areas; lower values keep more two-ink blending. Neutrals, in-gamut colors, and deep shadows always keep both inks. No effect in Natural.",
       },
       {
+        heading: "Black generation",
+        body: "Only shown when the palette includes a black or gray ink. Like real printing (GCR), the neutral/gray part of an image is carried by the black ink instead of muddy overlaps of the colored inks — so grays and shadows stay clean while saturated colors keep their vibrancy (no black is added to them). Higher values put more of the neutral tone into black; 0 uses almost no black.",
+      },
+      {
         heading: "Halftone Mode",
         body: "How tone is rendered.\n• Dot Size — dots sit on a regular grid and grow larger in darker areas (classic AM halftone). Gradients are carried by smooth dot-size modulation.\n• Dot Density — fixed-size dots placed by probability; darker areas get more dots (stochastic / FM screening).",
       },
@@ -244,6 +249,10 @@ const guide = {
       {
         heading: "分離の強さ (Separation strength)",
         body: "Bold でのみ有効です。ガモット外の色をどれだけ強く単色へ寄せる（混色させない）かを決めます。値を大きくするほどクリーンでポスター調の単色域になり、小さいほど2色の混色を残します。中立色・ガモット内の色・深い影は常に2色を保ちます。Natural では効果はありません。",
+      },
+      {
+        heading: "黒生成 (Black generation)",
+        body: "黒またはグレーのインクを含む構成のときだけ表示されます。実際の印刷（GCR）と同じく、画像の中立（グレー）な部分を、有彩色インクの濁った重なりではなく黒インクで表現します。これでグレーや影はクリーンに締まり、鮮やかな色には黒を入れないので発色はそのまま保たれます。値を大きくするほど中立部を多く黒へ置き換え、0 ではほぼ黒を使いません。",
       },
       {
         heading: "ハーフトーンモード",
@@ -474,6 +483,7 @@ function App() {
   const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("am");
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
   const [gamutCutoff, setGamutCutoff] = useState(0.5);
+  const [blackGeneration, setBlackGeneration] = useState(0.7);
   const [highlightCutoff, setHighlightCutoff] = useState(0);
   const [paperTexture, setPaperTexture] = useState<PaperTexture>("none");
   const [paperTextureAmount, setPaperTextureAmount] = useState(0.5);
@@ -583,6 +593,7 @@ function App() {
         halftoneMode,
         colorMode,
         gamutThreshold: gamutCutoff,
+        blackGeneration,
         highlightCutoff,
         paperTexture,
         paperTextureAmount,
@@ -664,6 +675,16 @@ function App() {
     setPaperTextureAmount(pick([0.3, 0.5, 0.7]));
   };
 
+  // 黒/グレーの中立インクを含むか（GCR = 黒生成が効く構成か）を判定。
+  // 吸収があり、かつ Lab 彩度が低いインクを「中立」とみなす。
+  const hasNeutralInk = colors.some((c) => {
+    const { r, g, b } = hexToRgb(c.color);
+    const absorb = Math.hypot((255 - r) / 255, (255 - g) / 255, (255 - b) / 255);
+    if (absorb < 0.05) return false; // ほぼ白は対象外
+    const [, la, lb] = rgbToLab(r, g, b);
+    return Math.hypot(la, lb) < 12;
+  });
+
   // 「最近使った設定」（localStorage）。明示的な保存ではなくサジェスト用。
   const currentSettings: StencilSettings = {
     colors,
@@ -675,6 +696,7 @@ function App() {
     halftoneMode,
     colorMode,
     gamutCutoff,
+    blackGeneration,
     highlightCutoff,
     paperTexture,
     paperTextureAmount,
@@ -695,6 +717,7 @@ function App() {
     setHalftoneMode(s.halftoneMode);
     setColorMode(s.colorMode);
     setGamutCutoff(s.gamutCutoff);
+    setBlackGeneration(s.blackGeneration ?? 0.7);
     setHighlightCutoff(s.highlightCutoff);
     setPaperTexture(s.paperTexture);
     setPaperTextureAmount(s.paperTextureAmount);
@@ -816,6 +839,7 @@ function App() {
               halftoneMode={halftoneMode}
               colorMode={colorMode}
               gamutThreshold={gamutCutoff}
+              blackGeneration={blackGeneration}
               highlightCutoff={highlightCutoff}
               paperTexture={paperTexture}
               paperTextureAmount={paperTextureAmount}
@@ -1247,6 +1271,24 @@ function App() {
                 />
                 <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
                   {Math.round(gamutCutoff * 100)}%
+                </span>
+              </div>
+            )}
+            {hasNeutralInk && (
+              <div className="mt-4">
+                <Label className="mb-2 text-xs text-muted-foreground">
+                  Black generation
+                </Label>
+                <Slider
+                  value={[blackGeneration]}
+                  onValueChange={([v]) => setBlackGeneration(v)}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  className="mt-2"
+                />
+                <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+                  {Math.round(blackGeneration * 100)}%
                 </span>
               </div>
             )}

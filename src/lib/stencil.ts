@@ -54,6 +54,13 @@ export interface StencilOptions {
    */
   gamutThreshold?: number;
   /**
+   * 黒生成（GCR）の強さ (0–1)。黒/グレーの中立インクが1本ある構成でのみ有効。
+   * 有彩色が重なって作る「グレー成分」を、この割合だけ中立インク（黒）へ置換する。
+   * 0 = 黒をほぼ使わない（有彩色のみ）、1 = 中立部を最大限黒へ。デフォルト: 0.7。
+   * 鮮やかな色には黒を入れず、中立色・影ほど黒へ寄せる（実印刷の GCR/UCR に相当）。
+   */
+  blackGeneration?: number;
+  /**
    * ハイライトのクリップ (0–1)。この濃度未満のインクを非印刷にする。
    * ほぼ白（JPEG ノイズや反アリアス等でわずかに色づいた画素）が網点として
    * 散るのを防ぐ。デフォルト: 0（オフ）
@@ -551,6 +558,49 @@ function applyBoldContrast(maps: Float32Array[], pixelCount: number): void {
 }
 
 /**
+ * 黒生成（GCR: Gray Component Replacement）。
+ *
+ * 有彩色インクだけで分解した密度マップに対し、「中立（低彩度）な画素ほど」その明度を
+ * 中立インク（黒/グレー）で担わせ、有彩色を薄める。一般的な印刷と同じく、
+ * 鮮やかな色は黒を使わず（色を殺さない）、グレー・影の部分だけ黒で締める。
+ *
+ * 各画素で blend = strength × 中立ゲート(彩度が低いほど1)。
+ *   黒密度 k = blend × (目標明度に一致する黒単色の被覆)
+ *   有彩色密度 ×= (1 − blend)
+ * これで有彩色のみ(k=0)と黒単色(目標明度)の間を補間し、明度をおおむね保つ。
+ */
+function applyBlackGeneration(
+  densityMaps: Float32Array[],
+  chromaticIndex: number[],
+  kIndex: number,
+  source: ImageDataLike,
+  paper: RGB,
+  inkRgbs: RGB[],
+  inkOpacity: number,
+  strength: number
+): void {
+  if (strength <= 0) return;
+  const kTable = buildLightnessTable(inkRgbs[kIndex], paper, inkOpacity);
+  const kMap = densityMaps[kIndex];
+  const data = source.data;
+  const pixelCount = source.width * source.height;
+  for (let p = 0; p < pixelCount; p++) {
+    const off = p * 4;
+    if (data[off + 3] < 3) continue;
+    const [Lt, at, bt] = rgbToLab(data[off], data[off + 1], data[off + 2]);
+    const Ct = Math.hypot(at, bt);
+    // 中立ゲート: 彩度が低いほど 1（黒を使う）、鮮やかなほど 0（黒を使わない）
+    const gate = 1 - smoothstep(6, 26, Ct);
+    const blend = strength * gate;
+    if (blend < 0.01) continue;
+    kMap[p] = blend * coverageForLightness(kTable, Lt);
+    for (let t = 0; t < chromaticIndex.length; t++) {
+      densityMaps[chromaticIndex[t]][p] *= 1 - blend;
+    }
+  }
+}
+
+/**
  * DOM 非依存のステンシル印刷処理。
  * ソースのピクセルデータを受け取り、加工済みのピクセル配列を返す。
  * Web Worker からも呼び出し可能。
@@ -559,7 +609,7 @@ export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, blackGeneration = 0.7, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;
@@ -595,14 +645,32 @@ export function computeStencil(
     return Math.sqrt(dR * dR + dG * dG + dB * dB) < ABSORPTION_THRESHOLD;
   });
 
-  // 色分解に渡すインクから低吸収インクを除外
+  // 中立（無彩色）インク＝黒/グレーを検出。GCR で「グレー成分」を担わせる。
+  const NEUTRAL_CHROMA = 12; // Lab 彩度がこれ未満なら中立インクとみなす
+  const isNeutral = inkRgbs.map((ink, i) => {
+    if (isLowAbsorption[i]) return false;
+    const [, a, b] = rgbToLab(ink.r, ink.g, ink.b);
+    return Math.hypot(a, b) < NEUTRAL_CHROMA;
+  });
+  const neutralIdx: number[] = [];
+  let chromaticCount = 0;
+  for (let i = 0; i < inkRgbs.length; i++) {
+    if (isLowAbsorption[i]) continue;
+    if (isNeutral[i]) neutralIdx.push(i);
+    else chromaticCount++;
+  }
+  // GCR は「中立インクがちょうど1本 + 有彩色2本以上」のときだけ有効（黒/グレー付き構成）
+  const useGCR = neutralIdx.length === 1 && chromaticCount >= 2 && blackGeneration > 0;
+  const kIndex = useGCR ? neutralIdx[0] : -1;
+
+  // 色分解に渡すインク: 低吸収インクと、GCR 時の中立インク（黒）を除外
   const decompInks: RGB[] = [];
   const decompIndexMap: number[] = []; // decompInks[i] → 元の colors[j]
   for (let i = 0; i < inkRgbs.length; i++) {
-    if (!isLowAbsorption[i]) {
-      decompIndexMap.push(i);
-      decompInks.push(inkRgbs[i]);
-    }
+    if (isLowAbsorption[i]) continue;
+    if (useGCR && i === kIndex) continue; // 黒は分解に入れず GCR で生成
+    decompIndexMap.push(i);
+    decompInks.push(inkRgbs[i]);
   }
 
   const pixelCount = width * height;
@@ -639,6 +707,13 @@ export function computeStencil(
     const strength = colorMode === "bold" ? 0.5 + gamutThreshold : 0;
     applySnapSeparation(
       densityMaps, decompIndexMap, residuals, source, paper, inkRgbs, inkOpacity, strength
+    );
+  }
+  // 黒生成（GCR）: 有彩色分解の上に、中立な画素ほど黒で明度を担わせ有彩色を薄める。
+  // 鮮やかな色は黒を使わず色を保ち、グレー・影だけ黒で締める（実印刷の黒の使い方）。
+  if (useGCR) {
+    applyBlackGeneration(
+      densityMaps, decompIndexMap, kIndex, source, paper, inkRgbs, inkOpacity, blackGeneration
     );
   }
   // Bold: 版ごとの明暗コントラストを強めてグラフィックな締まりを出す
