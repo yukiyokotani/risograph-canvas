@@ -5,7 +5,7 @@
  * ハーフトーン処理を施して合成する。
  */
 
-import { hexToRgb, luminance, type RGB } from "./color";
+import { hexToRgb, luminance, rgbToLab, type RGB } from "./color";
 import { applyHalftone, type HalftoneMode } from "./halftone";
 
 export type { HalftoneMode };
@@ -379,84 +379,173 @@ function decomposeColors(
   return { maps, residuals };
 }
 
+const smoothstep = (a: number, b: number, x: number): number => {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
 /**
- * Bold モード: NNLS 密度マップを後処理し、大胆な色分離を実現する。
- *
- * 0. ガモット外の色（残差大＝使用インクで表現できない色）は非印刷にする
- * 1. 競合抑制: 各ピクセルで支配的なインクを強調し、弱いインクを抑制
- * 2. シグモイドコントラスト: 密度値を 0/1 の両極端に押しやる
+ * 単色インク density → 描画明度(L*) の対応表を作る（レンダラと同じ順モデル）。
+ * 白地でインクを乗算し実際の紙色に合成した結果の L* を density 刻みで求める。
+ * ガモット外の色を「支配的インク単色で明度を保ったまま」再現する際、目標明度に
+ * 一致する単色 density を逆引きするのに使う。
  */
-function applyBoldTransform(
-  maps: Float32Array[],
-  pixelCount: number,
-  residuals?: Float32Array,
-  gamutThreshold = 0.5
+function buildLightnessTable(
+  ink: RGB,
+  paper: RGB,
+  inkOpacity: number,
+  steps = 64
+): Float32Array {
+  const sR = 1 - ink.r / 255;
+  const sG = 1 - ink.g / 255;
+  const sB = 1 - ink.b / 255;
+  const pR = paper.r / 255;
+  const pG = paper.g / 255;
+  const pB = paper.b / 255;
+  const table = new Float32Array(steps + 1);
+  for (let k = 0; k <= steps; k++) {
+    const a = (k / steps) * inkOpacity; // 実効カバレッジ
+    const inv = 1 - a;
+    const r = ((1 - a * sR) + (pR - 1) * inv) * 255;
+    const g = ((1 - a * sG) + (pG - 1) * inv) * 255;
+    const b = ((1 - a * sB) + (pB - 1) * inv) * 255;
+    table[k] = rgbToLab(r, g, b)[0];
+  }
+  return table;
+}
+
+/** 明度表(単調減少)から目標 L* に一致する density(0-1) を線形補間で逆引き */
+function coverageForLightness(table: Float32Array, targetL: number): number {
+  const steps = table.length - 1;
+  if (targetL >= table[0]) return 0;
+  if (targetL <= table[steps]) return 1;
+  for (let k = 0; k < steps; k++) {
+    const l0 = table[k];
+    const l1 = table[k + 1];
+    if (targetL <= l0 && targetL >= l1) {
+      const f = l0 === l1 ? 0 : (l0 - targetL) / (l0 - l1);
+      return (k + f) / steps;
+    }
+  }
+  return 1;
+}
+
+/**
+ * 色分解マップの後処理（Natural / Bold 共通）。
+ *
+ * 加法 NNLS の密度マップを土台に、「彩度が高く・色相がガモット外で・暗すぎない」＝
+ * 混色すると濁って彩度が落ちる色だけ、少数派インクを抑えて支配的インク単色へ寄せ、
+ * 明度を保つ（例: 青×ピンクでの緑 → 澄んだ青、暖色の肌 → ピンク）。どのインクへ
+ * 寄せるかは加法フィットの配分が決める。中立色・ガモット内の二次色・暗い影は
+ * 2 版のまま残す（デュオトーンらしさと影の深さを保つ）。
+ *
+ * strength: 0 = Natural（濁りだけ除去）, 1〜 = Bold（より積極的に単色分離）。
+ */
+function applySnapSeparation(
+  densityMaps: Float32Array[],
+  decompIndex: number[],
+  residuals: Float32Array,
+  source: ImageDataLike,
+  paper: RGB,
+  inkRgbs: RGB[],
+  inkOpacity: number,
+  strength: number
 ): void {
-  const n = maps.length;
-  if (n === 0) return;
+  if (decompIndex.length < 2) return; // 2 版以上でないと「濁る混色」は起きない
 
-  // 競合抑制の強さ。大きいほど従属インクを強く殺す。
-  // 2.0 は殺しすぎで、従属インク（例: 青地の上の赤）が「勝つ場所にだけ現れる
-  // パッチ＝密度表現」になり、グラデーションがドットサイズ変調で滑らかに出ない。
-  // 0.6 に緩めて従属インクを残し、滑らかなサイズ変調グラデーションを保つ。
-  // Bold らしさ（色分離の強さ）はシグモイドとガモット外カットが担うため維持される。
-  const SUPPRESSION_POWER = 0.6;
-  const SIGMOID_GAIN = 6.0;
-  const SIGMOID_MID = 0.35;
+  const m = decompIndex.length;
+  const tables = decompIndex.map((idx) =>
+    buildLightnessTable(inkRgbs[idx], paper, inkOpacity)
+  );
+  // 順モデル用の吸収ベクトルと紙色（0-1）
+  const sR = decompIndex.map((idx) => 1 - inkRgbs[idx].r / 255);
+  const sG = decompIndex.map((idx) => 1 - inkRgbs[idx].g / 255);
+  const sB = decompIndex.map((idx) => 1 - inkRgbs[idx].b / 255);
+  const pRn = paper.r / 255;
+  const pGn = paper.g / 255;
+  const pBn = paper.b / 255;
 
-  // 残差（ガモット外れ度）による非印刷のしきい値。
-  // gamutThreshold: 0 = ほぼ切り捨てない, 1 = 積極的に非印刷にする。
-  // cutLow 以下の残差は通常印刷、cutHigh 以上は完全に非印刷、
-  // その間は滑らかにフェードさせる。
-  const cutHigh = 0.75 - 0.6 * gamutThreshold;
-  const cutLow = cutHigh * 0.5;
+  const b = Math.max(0, strength);
+  // ゲートのしきい値（strength が高いほど広く・強く単色化）
+  const rLo = 0.12 - 0.05 * b;
+  const rHi = 0.34 - 0.1 * b;
+  const cLo = 8 - 4 * b;
+  const cHi = 22 - 6 * b;
+  const scale = 0.85 + 0.15 * Math.min(b, 1);
 
-  // ガモット外カットを適用する明るさの上限（最大インク濃度で判定）。
-  // これ以上インクを要する暗い色は、たとえガモット外でも白飛びさせず、最も近い
-  // インクで残す（例: 青ピンクでの緑の葉は「青」で残す）。カットは主に「ほぼ白の上の
-  // 淡いガモット外の色づき」を掃除する用途に限定する。
-  const GAMUT_KEEP_DARK = 0.3;
-
-  // シグモイド正規化: sigmoid(0)=0, sigmoid(1)=1 となるよう再スケール
-  const s0 = 1 / (1 + Math.exp(SIGMOID_GAIN * SIGMOID_MID));
-  const s1 = 1 / (1 + Math.exp(-SIGMOID_GAIN * (1 - SIGMOID_MID)));
-  const sRange = s1 - s0;
-
+  const data = source.data;
+  const pixelCount = source.width * source.height;
   for (let p = 0; p < pixelCount; p++) {
-    let maxD = 0;
-    for (let i = 0; i < n; i++) {
-      if (maps[i][p] > maxD) maxD = maps[i][p];
-    }
-    if (maxD < 0.01) continue;
+    const off = p * 4;
+    if (data[off + 3] < 3) continue;
+    const [Lt, at, bt] = rgbToLab(data[off], data[off + 1], data[off + 2]);
+    const Ct = Math.hypot(at, bt);
 
-    // Phase 0: ガモット外（使用インクで作れない色相）を非印刷にする。ただし
-    // 暗い色（GAMUT_KEEP_DARK 以上のインクを要する色）は白飛びさせないため
-    // カット対象外にし、最も近いインクで残す（例: 緑の葉は青で残す）。
-    let printFactor = 1;
-    if (residuals && maxD < GAMUT_KEEP_DARK) {
-      const r = residuals[p];
-      if (r >= cutHigh) {
-        for (let i = 0; i < n; i++) maps[i][p] = 0;
-        continue;
-      }
-      if (r > cutLow) {
-        const t = (r - cutLow) / (cutHigh - cutLow);
-        printFactor = 1 - t * t * (3 - 2 * t); // smoothstep で滑らかにフェード
-      }
-    }
+    const offGamut = smoothstep(rLo, rHi, residuals[p]);
+    if (offGamut <= 0) continue;
+    const satGate = smoothstep(cLo, cHi, Ct);
+    const darkGate = smoothstep(18, 40, Lt); // 深い影は 2 版で暗さを確保
+    const snap = offGamut * satGate * darkGate * scale;
+    if (snap < 0.02) continue;
 
-    // Phase 1: 競合抑制 — 支配的なインクを残し、弱いインクを抑制
-    for (let i = 0; i < n; i++) {
-      const ratio = maps[i][p] / maxD;
-      maps[i][p] *= Math.pow(ratio, SUPPRESSION_POWER);
+    // 現状の 2 版合成色（＝濁った混色）を求める
+    let mr = 1, mg = 1, mb = 1, ia = 1;
+    for (let t = 0; t < m; t++) {
+      const a = densityMaps[decompIndex[t]][p] * inkOpacity;
+      mr *= 1 - a * sR[t];
+      mg *= 1 - a * sG[t];
+      mb *= 1 - a * sB[t];
+      ia *= 1 - a;
     }
+    const curR = (mr + (pRn - 1) * ia) * 255;
+    const curG = (mg + (pGn - 1) * ia) * 255;
+    const curB = (mb + (pBn - 1) * ia) * 255;
+    const [cl, ca, cb] = rgbToLab(curR, curG, curB);
 
-    // Phase 2: シグモイドコントラスト — 中間調を減らし、はっきりした色分離に
-    for (let i = 0; i < n; i++) {
-      const x = maps[i][p];
-      if (x < 0.001) { maps[i][p] = 0; continue; }
-      const sig = 1 / (1 + Math.exp(-SIGMOID_GAIN * (x - SIGMOID_MID)));
-      maps[i][p] = Math.max(0, Math.min(1, (sig - s0) / sRange)) * printFactor;
+    // 支配的インク = 現状の混色に「知覚的に最も近い単色」。密度の大小ではなく
+    // 現状の色味が既に寄っている側へ純化するので、暖⇄寒を跨いで反転しない。
+    let dom = -1;
+    let domCov = 0;
+    let bestDE = Infinity;
+    for (let t = 0; t < m; t++) {
+      const cov = coverageForLightness(tables[t], Lt);
+      const a = cov * inkOpacity;
+      const sr = ((1 - a * sR[t]) + (pRn - 1) * (1 - a)) * 255;
+      const sg = ((1 - a * sG[t]) + (pGn - 1) * (1 - a)) * 255;
+      const sb = ((1 - a * sB[t]) + (pBn - 1) * (1 - a)) * 255;
+      const [sl, sa, sbb] = rgbToLab(sr, sg, sb);
+      const de = Math.hypot(sl - cl, sa - ca, sbb - cb);
+      if (de < bestDE) { bestDE = de; dom = t; domCov = cov; }
+    }
+    if (dom < 0) continue;
+
+    // 単色（目標明度に一致）へ snap 分だけ寄せる
+    for (let t = 0; t < m; t++) {
+      const map = densityMaps[decompIndex[t]];
+      const tgt = t === dom ? domCov : 0;
+      map[p] = map[p] * (1 - snap) + tgt * snap;
+    }
+  }
+}
+
+/**
+ * Bold モードのシグモイドコントラスト。密度の中間調を減らして 0/1 寄りにし、
+ * 版ごとのメリハリ（グラフィックな締まり）を強める。単色分離は
+ * {@link applySnapSeparation} が担い、ここは明暗コントラストのみを受け持つ。
+ */
+function applyBoldContrast(maps: Float32Array[], pixelCount: number): void {
+  const GAIN = 6.0;
+  const MID = 0.35;
+  const s0 = 1 / (1 + Math.exp(GAIN * MID));
+  const s1 = 1 / (1 + Math.exp(-GAIN * (1 - MID)));
+  const sRange = s1 - s0;
+  for (let i = 0; i < maps.length; i++) {
+    const m = maps[i];
+    for (let p = 0; p < pixelCount; p++) {
+      const x = m[p];
+      if (x < 0.001) { m[p] = 0; continue; }
+      const sig = 1 / (1 + Math.exp(-GAIN * (x - MID)));
+      m[p] = Math.max(0, Math.min(1, (sig - s0) / sRange));
     }
   }
 }
@@ -518,7 +607,7 @@ export function computeStencil(
 
   const pixelCount = width * height;
   const decomp = decompInks.length > 0
-    ? decomposeColors(source, decompInks, WHITE, colorMode === "bold")
+    ? decomposeColors(source, decompInks, WHITE, true)
     : { maps: [] as Float32Array[], residuals: new Float32Array(pixelCount) };
   const decompMaps = decomp.maps;
   const residuals = decomp.residuals;
@@ -543,10 +632,18 @@ export function computeStencil(
     }
   }
 
-  // Bold モード: 密度マップを後処理して大胆な色分離に
-  // （使用インクで表現できない色は残差をもとに非印刷にする）
+  // 色分解の後処理: ガモット外の彩度高色を「混色の濁り」ではなく支配的インク単色へ
+  // 寄せて明度・彩度を保つ（緑→澄んだ青 等）。Natural でも濁りを除去し、Bold はより
+  // 積極的に分離する。Bold の分離強度は gamutThreshold（0-1）で調整できる。
+  if (decompIndexMap.length >= 2) {
+    const strength = colorMode === "bold" ? 0.5 + gamutThreshold : 0;
+    applySnapSeparation(
+      densityMaps, decompIndexMap, residuals, source, paper, inkRgbs, inkOpacity, strength
+    );
+  }
+  // Bold: 版ごとの明暗コントラストを強めてグラフィックな締まりを出す
   if (colorMode === "bold") {
-    applyBoldTransform(densityMaps, pixelCount, residuals, gamutThreshold);
+    applyBoldContrast(densityMaps, pixelCount);
   }
 
   // ハイライトのクリップ（レベル補正）: しきい値未満のごく低い濃度（ほぼ白）を 0 にして、

@@ -174,11 +174,11 @@ const guide = {
       },
       {
         heading: "Separation",
-        body: "How the image is split into ink layers.\n• Natural — reproduces the original colors, letting inks overlap smoothly. Best for photographic gradients.\n• Bold — punchier, high-contrast separation for a graphic look (see Off-gamut cutoff).",
+        body: "How the image is split into ink layers.\n• Natural — reproduces the original colors. Saturated colors the inks can't mix (e.g. green with blue+pink) resolve to the nearest single ink instead of a muddy overlap, keeping them clean and bright. Best for photographic gradients.\n• Bold — punchier, high-contrast separation for a graphic look (see Separation strength).",
       },
       {
-        heading: "Off-gamut cutoff",
-        body: "Only active with Bold separation. Colors the selected inks can't reproduce (out of gamut) are left unprinted, so they don't come out as muddy dots. Higher values cut more aggressively; lower values keep more of the borderline colors. No effect in Natural.",
+        heading: "Separation strength",
+        body: "Only active with Bold. Sets how hard out-of-gamut colors snap toward a single ink instead of mixing. Higher values give cleaner, more posterized single-ink areas; lower values keep more two-ink blending. Neutrals, in-gamut colors, and deep shadows always keep both inks. No effect in Natural.",
       },
       {
         heading: "Halftone Mode",
@@ -239,11 +239,11 @@ const guide = {
       },
       {
         heading: "色分解 (Separation)",
-        body: "画像をインクの色版にどう分解するかを制御します。\n• Natural — 元の色を忠実に再現し、インク同士を滑らかに重ねます。写真的なグラデーション向き。\n• Bold — コントラストの高いグラフィカルな色分離（下の Off-gamut cutoff 参照）。",
+        body: "画像をインクの色版にどう分解するかを制御します。\n• Natural — 元の色を忠実に再現します。インクで混色できない鮮やかな色（例: 青+ピンクでの緑）は、濁った重なりにせず最も近い単色インクへ寄せて、澄んだ発色を保ちます。写真的なグラデーション向き。\n• Bold — コントラストの高いグラフィカルな色分離（下の Separation strength 参照）。",
       },
       {
-        heading: "ガモット外カット (Off-gamut cutoff)",
-        body: "Bold の色分解でのみ有効です。使用インクで再現できない色（ガモット外）を非印刷にして、濁った網点として出ないようにします。値を大きくするほど積極的にカットし、小さいほど境界付近の色を残します。Natural では効果はありません。",
+        heading: "分離の強さ (Separation strength)",
+        body: "Bold でのみ有効です。ガモット外の色をどれだけ強く単色へ寄せる（混色させない）かを決めます。値を大きくするほどクリーンでポスター調の単色域になり、小さいほど2色の混色を残します。中立色・ガモット内の色・深い影は常に2色を保ちます。Natural では効果はありません。",
       },
       {
         heading: "ハーフトーンモード",
@@ -1235,7 +1235,7 @@ function App() {
             {colorMode === "bold" && (
               <div className="mt-4">
                 <Label className="mb-2 text-xs text-muted-foreground">
-                  Off-gamut cutoff
+                  Separation strength
                 </Label>
                 <Slider
                   value={[gamutCutoff]}
