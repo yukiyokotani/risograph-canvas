@@ -157,11 +157,40 @@ function fiberField(
   return f / angles.length;
 }
 
+/** 2 オクターブの微細グレイン（紙の tooth）。高周波を混ぜて粒立ちを細かくする。 */
+function grain2(x: number, y: number, rs: number, seed: number): number {
+  const a = smoothNoise(x, y, Math.max(1.4 * rs, 1), seed) - 0.5;
+  const b = smoothNoise(x, y, Math.max(0.7 * rs, 1), seed + 7) - 0.5;
+  return a * 0.62 + b * 0.38;
+}
+
+/**
+ * 散在する暗い斑点（繊維片/夾雑物）。細かい場の上位数%だけを暗点にし、
+ * 再生紙のような「ポツポツした繊維片」を表現する。まれに明るい斑点も混ぜる。
+ * 戻り値はおおよそ -1〜+0.4（負が暗点）。
+ */
+function speckField(x: number, y: number, rs: number, seed: number): number {
+  const c = Math.max(1.1 * rs, 1);
+  let s = 0;
+  const n = smoothNoise(x, y, c, seed + 311);
+  if (n > 0.9) s -= (n - 0.9) / 0.1; // 上位10%を暗点に
+  const n2 = smoothNoise(x, y, c, seed + 913);
+  if (n2 > 0.95) s += ((n2 - 0.95) / 0.05) * 0.4; // まれに明点
+  return s;
+}
+
+/** 縦に引き延ばした尾根状ノイズで、紙の皺（クリンクル）の筋を作る。 */
+function crinkle(x: number, y: number, rs: number, seed: number): number {
+  const n = smoothNoiseAniso(x, y, 2.4 * rs, 8 * rs, seed + 55);
+  return 1 - Math.abs(2 * n - 1) - 0.5; // -0.5〜0.5 の尾根
+}
+
 /**
  * 紙テクスチャの明度(l)と暖色ムラ(w)を返す（おおよそ -1〜1）。
  *
- * felt … 多方向に絡み合うマットな繊維、fiber … 一方向に流れる長い繊維。
- * どちらも細かい tooth を重ね、雲状ムラは脇役に留めて「もや」に見せない。
+ * fiber … 縦の細い繊維＋クリンクルの水彩紙風、felt … 均一な細粒＋繊維片の再生紙風。
+ * どちらも微細グレイン（{@link grain2}）と散在する斑点（{@link speckField}）を重ねて
+ * 実紙の粒立ちを出し、雲状ムラは脇役に留めて「もや」に見せない。
  * すべての特徴サイズを renderScale 倍にして、プレビューと高解像度出力で見た目を揃える。
  */
 function paperTextureAt(
@@ -172,28 +201,28 @@ function paperTextureAt(
   seed: number
 ): { l: number; w: number } {
   if (type === "none") return { l: 0, w: 0 };
-  const fine = Math.max(1.5 * rs, 1);
-  const tooth = smoothNoise(x, y, fine, seed + 131) - 0.5;
   const cloud = smoothNoise(x, y, 50 * rs, seed + 1) - 0.5;
+  const g = grain2(x, y, rs, seed);
+  const sp = speckField(x, y, rs, seed);
 
-  let fiber: number;
-  let fiberW: number;
-  let toothW: number;
+  let l: number;
+  let speckAmt: number;
   if (type === "fiber") {
-    // ほぼ一方向（水平寄り）に長く伸びた繊維で、方向性のある地合いを出す
-    fiber = fiberField(x, y, seed, [3, -3, 14], 24 * rs, 1.3 * rs);
-    fiberW = 1.5;
-    toothW = 0.5;
+    // 水彩紙: 縦の細い繊維（短めで不規則）＋クリンクルの筋
+    const fiber = fiberField(x, y, seed, [86, 94, 79], 13 * rs, 1.25 * rs);
+    const cr = crinkle(x, y, rs, seed);
+    l = fiber * 1.0 + cr * 0.6 + g * 0.55 + cloud * 0.25;
+    speckAmt = 0.35;
   } else {
-    // felt: 4 方向で交差させたマットな繊維
-    fiber = fiberField(x, y, seed, [0, 90, 43, -37], 13 * rs, 1.8 * rs);
-    fiberW = 1.1;
-    toothW = 0.7;
+    // felt(再生紙): 均一な細粒＋ゆるい多方向繊維、斑点を強めに
+    const fiber = fiberField(x, y, seed, [0, 90, 45, -40], 9 * rs, 2.2 * rs);
+    l = g * 0.85 + fiber * 0.6 + cloud * 0.3;
+    speckAmt = 1.0;
   }
 
-  let l = fiber * fiberW + tooth * toothW + cloud * 0.3;
-  // 軽いコントラストで平坦なグレーを避ける
-  l = Math.sign(l) * Math.pow(Math.abs(l), 0.9);
+  // 軽いコントラストで平坦なグレーを避けてから、暗点（斑点）を重ねる
+  l = Math.sign(l) * Math.pow(Math.abs(l), 0.92);
+  l += sp * speckAmt;
   const w = cloud * 0.5;
 
   return { l, w };
