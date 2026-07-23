@@ -427,7 +427,7 @@ function App() {
   const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("fm");
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
   const [gamutCutoff, setGamutCutoff] = useState(0.5);
-  const [highlightCutoff, setHighlightCutoff] = useState(0.06);
+  const [highlightCutoff, setHighlightCutoff] = useState(0);
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("cmyk");
   const fileInputRef = useRef<HTMLInputElement>(null);

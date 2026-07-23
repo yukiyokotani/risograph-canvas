@@ -54,7 +54,7 @@ export interface StencilOptions {
   /**
    * ハイライトのクリップ (0–1)。この濃度未満のインクを非印刷にする。
    * ほぼ白（JPEG ノイズや反アリアス等でわずかに色づいた画素）が網点として
-   * 散るのを防ぐ。デフォルト: 0.06
+   * 散るのを防ぐ。デフォルト: 0（オフ）
    */
   highlightCutoff?: number;
   /** 印刷の掠れノイズ (0–0.5)。各色レイヤーにランダムな欠けを生成。デフォルト: 0 */
@@ -333,7 +333,7 @@ export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0.06, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;
