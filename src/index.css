@@ -121,15 +121,16 @@
   }
 }
 
-/* 透明背景プレビュー用の格子模様（よくある透過インジケータ） */
+/* 透明背景プレビュー用の格子模様（よくある透過インジケータ）。
+   conic-gradient は blur コストが高いため、2×2 の bitmap タイルを pixelated 拡大して使う
+   （見た目は従来と同一の 8px セル・同色）。 */
 .checkerboard {
-  background-color: #ffffff;
-  background-image: repeating-conic-gradient(#cfcfcf 0% 25%, transparent 0% 50%);
+  background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAF0lEQVR4nGM4f/78////Gf7//3/+/HkAS9oK1WG2DIEAAAAASUVORK5CYII=");
   background-size: 16px 16px;
+  image-rendering: pixelated;
 }
 .dark .checkerboard {
-  background-color: #1c1c1c;
-  background-image: repeating-conic-gradient(#3a3a3a 0% 25%, transparent 0% 50%);
+  background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGOwsrKSkZFhkJGRsbKyAgAOKgIFX4MofgAAAABJRU5ErkJggg==");
 }
 
 /* Always show scrollbar for sidebar on desktop */

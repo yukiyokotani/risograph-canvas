@@ -15,6 +15,7 @@ import {
 } from "./lib/stencil";
 import {
   Download,
+  History,
   Info,
   Maximize,
   Moon,
@@ -92,6 +93,13 @@ const SAMPLE_IMAGE = `${import.meta.env.BASE_URL}sample.jpg`;
 const BASE_WIDTH = 600;
 
 /**
+ * ガラス調コントロールの共通サーフェス（半透明の背景＋blur＋枠）。
+ * コントロールパネル・ズーム・ダウンロードの背景色を統一するための定数。
+ * 角丸/影/余白は各要素側で付与する。
+ */
+const GLASS_SURFACE = "border bg-background/70 backdrop-blur-md";
+
+/**
  * Canvas を PNG として保存する。
  *
  * iOS Safari は `data:` URL + `download` 属性を尊重せず保存できないため、
@@ -152,43 +160,51 @@ const guide = {
     sections: [
       {
         heading: "Image",
-        body: "Select an image file from your device. All processing runs entirely in your browser — no images are uploaded to any server.\n\nEnable \"Invert\" to reverse the tonal values of the input image. This is useful when printing light-colored inks (e.g. white) on dark paper — bright areas in the original become heavily inked.",
+        body: "Choose an image from your device. Everything is processed locally in your browser — nothing is uploaded.\n\nInvert tones flips the input image's tones (light ↔ dark) before printing. Useful when printing a light ink (e.g. white) on dark paper, so bright areas become heavily inked.",
       },
       {
         heading: "Paper",
-        body: "Choose the paper color to simulate different paper stocks. Enable \"Transparent\" to export with a transparent background instead of a paper color.",
+        body: "Set the paper color to simulate different stocks. Texture adds a paper surface — Felt or Fiber — with adjustable strength. Enable Transparent to drop the paper entirely: only the ink remains, exported over a transparent background.",
       },
       {
         heading: "Ink Colors",
-        body: "Select from preset color combinations, or build your own by adding individual stencil ink colors. Each ink becomes a separate color layer. Remove colors by clicking the × on each badge. Opacity controls how strongly the ink covers the paper.",
+        body: "Pick a preset combination, or build your own by adding inks. Each ink prints as its own screen at a different angle. Remove an ink with the × on its badge. Opacity sets how opaquely the inks sit on the paper — lower values give more translucent, multiply-like overlaps where inks meet.",
       },
       {
         heading: "Separation",
-        body: "Controls how the image is decomposed into ink color layers.\n• Natural — Faithfully reproduces the original colors by blending inks proportionally.\n• Bold — Aggressively separates colors for a high-contrast, graphic look typical of artistic stencil prints.",
+        body: "How the image is split into ink layers.\n• Natural — reproduces the original colors, letting inks overlap smoothly. Best for photographic gradients.\n• Bold — punchier, high-contrast separation for a graphic look. In Bold, Off-gamut cutoff drops colors the chosen inks can't reproduce.",
       },
       {
         heading: "Halftone Mode",
-        body: "Determines how tonal gradation is expressed.\n• Dot Density — Dots are a fixed size; darker areas have more dots (stochastic screening).\n• Dot Size — Dots are arranged in a regular grid; darker areas have larger dots (classic halftone).",
+        body: "How tone is rendered.\n• Dot Size — dots sit on a regular grid and grow larger in darker areas (classic AM halftone). Gradients are carried by smooth dot-size modulation.\n• Dot Density — fixed-size dots placed by probability; darker areas get more dots (stochastic / FM screening).",
       },
       {
         heading: "Dot Size",
-        body: "Controls the size of halftone dots. Smaller values produce finer detail; larger values create a more visible dot pattern.",
+        body: "Base dot pitch of the screen. Smaller values give a finer screen with more detail; larger values create a bolder, more visible dot pattern.",
       },
       {
         heading: "Density",
-        body: "Scales the overall ink density. Higher values produce darker, more saturated prints.",
+        body: "Overall ink amount. Higher values print darker and more saturated; in Dot Size mode the darkest areas fill in more (dots merge toward solid).",
+      },
+      {
+        heading: "Highlight cutoff",
+        body: "Drops the faintest tones below the threshold so near-white areas stay clean (removes stray dots from JPEG noise or anti-aliasing). Tones above the threshold are remapped so dots still grow from tiny — the highlight gradient stays size-modulated rather than turning into scattered dots.",
       },
       {
         heading: "Misregistration",
-        body: "Simulates the slight misalignment between color layers that naturally occurs in stencil printing. Higher values make the offset more pronounced.",
+        body: "Simulates the slight offset between color layers that naturally occurs in stencil / riso printing. Higher values make the offset more pronounced.",
       },
       {
         heading: "Noise",
-        body: "Adds ink scuffing and uneven coverage typical of real stencil prints. Higher values create broader, more visible ink unevenness.",
+        body: "Adds ink scuffing and uneven coverage typical of real stencil prints. Higher values create broader, more visible unevenness.",
+      },
+      {
+        heading: "History & Shuffle",
+        body: "The clock icon reopens your recently used settings — click one to apply it again. The shuffle icon randomizes the settings for quick exploration.",
       },
       {
         heading: "Download",
-        body: "Export the result as a PNG image. Choose 1x, 2x, or 4x resolution for higher quality output.",
+        body: "Export the result as a PNG. 1x / 2x / 4x render the same look at higher resolution (dots stay proportional, so it's a faithful scale-up of the preview).",
       },
       {
         heading: "License",
@@ -201,43 +217,51 @@ const guide = {
     sections: [
       {
         heading: "画像",
-        body: "デバイスから画像ファイルを選択します。すべての処理はブラウザ内で完結し、画像がサーバーに送信されることはありません。\n\n「Invert」を有効にすると入力画像の階調が反転されます。暗い紙に明るいインク（白など）で印刷する際に便利です。元画像の明るい部分にインクが多く乗るようになります。",
+        body: "デバイスから画像を選択します。処理はすべてブラウザ内で完結し、画像がアップロードされることはありません。\n\n「Invert tones」は入力画像の階調（明↔暗）を反転してから印刷します。暗い紙に明るいインク（白など）で刷るときに便利で、元画像の明るい部分にインクが多く乗ります。",
       },
       {
-        heading: "用紙",
-        body: "用紙の色を選択して、異なる紙質をシミュレートできます。「Transparent」を有効にすると、用紙色の代わりに透明な背景で書き出せます。",
+        heading: "用紙 (Paper)",
+        body: "用紙色を選んで紙質をシミュレートします。Texture は紙の地合い（Felt / Fiber）を強さ付きで加えます。「Transparent」を有効にすると用紙を無くし、インクだけを透明背景の上に書き出せます。",
       },
       {
-        heading: "インクカラー",
-        body: "プリセットの配色から選択するか、個別のステンシルインクカラーを追加して自由に組み合わせられます。各インクは独立した色版になります。バッジの×をクリックして色を削除できます。Opacityはインクの紙への乗り具合を調整します。",
+        heading: "インクカラー (Ink Colors)",
+        body: "プリセットの配色から選ぶか、インクを追加して自由に組み合わせます。各インクは異なる角度の独立した色版として刷られます。バッジの×で色を削除できます。Opacity はインクの乗り具合で、低くするほど半透明（乗算的）になり重なり部分の混色が出ます。",
       },
       {
         heading: "色分解 (Separation)",
-        body: "画像をインクカラーにどのように分解するかを制御します。\n• Natural — インクを比例配合して元の色を忠実に再現します。\n• Bold — 色を大胆に分離し、ステンシル印刷特有のコントラストの高いグラフィカルな仕上がりにします。",
+        body: "画像をインクの色版にどう分解するかを制御します。\n• Natural — 元の色を忠実に再現し、インク同士を滑らかに重ねます。写真的なグラデーション向き。\n• Bold — コントラストの高いグラフィカルな色分離。Bold では Off-gamut cutoff が、使用インクで再現できない色を非印刷にします。",
       },
       {
         heading: "ハーフトーンモード",
-        body: "濃淡の表現方法を決定します。\n• Dot Density — 点のサイズは固定で、暗い部分ほど点の密度が高くなります（確率的スクリーニング）。\n• Dot Size — 点が規則的な格子状に並び、暗い部分ほど点が大きくなります（従来型ハーフトーン）。",
+        body: "濃淡の表現方法を決めます。\n• Dot Size — 点が規則格子に並び、暗い部分ほど点が大きくなります（従来型 AM 網点）。階調は滑らかなドットサイズ変調で表現されます。\n• Dot Density — 点のサイズは固定で、暗い部分ほど点の密度が上がります（確率的 / FM スクリーニング）。",
       },
       {
-        heading: "ドットサイズ",
-        body: "ハーフトーンの点の大きさを調整します。小さい値は細かいディテールを、大きい値は目に見えるドットパターンを生み出します。",
+        heading: "ドットサイズ (Dot Size)",
+        body: "網点の基本ピッチです。小さいほど細かい網点でディテールが出ます。大きいほど目立つドットパターンになります。",
       },
       {
         heading: "濃度 (Density)",
-        body: "インク全体の濃度をスケーリングします。高い値ほど濃く、彩度の高い仕上がりになります。",
+        body: "インク全体量のスケールです。高いほど濃く彩度が上がります。Dot Size モードでは最暗部がより詰まり、点が融合してベタに近づきます。",
+      },
+      {
+        heading: "ハイライトのクリップ (Highlight cutoff)",
+        body: "しきい値未満のごく薄い階調を落として、ほぼ白の領域を綺麗に保ちます（JPEG ノイズや反アリアス由来の網点の散りを除去）。しきい値以上は再マップされ、点がゼロから滑らかに育つため、ハイライトの勾配が「点の散り」ではなくサイズ変調で表現されます。",
       },
       {
         heading: "版ずれ (Misregistration)",
-        body: "ステンシル印刷で自然に発生する色版のわずかなずれをシミュレートします。値を大きくするとずれが顕著になります。",
+        body: "ステンシル / リソ印刷で自然に生じる色版のわずかなずれをシミュレートします。値を大きくするとずれが顕著になります。",
       },
       {
-        heading: "ノイズ",
-        body: "実際のステンシル印刷に見られるインクの掠れや色ムラを加えます。値を大きくすると、より広範囲にムラが現れます。",
+        heading: "ノイズ (Noise)",
+        body: "実際のステンシル印刷に見られるインクの掠れや色ムラを加えます。値を大きくするほど広範囲にムラが現れます。",
       },
       {
-        heading: "ダウンロード",
-        body: "結果をPNG画像として書き出します。1x、2x、4xの解像度を選択して、より高品質な出力が可能です。",
+        heading: "履歴・シャッフル (History & Shuffle)",
+        body: "時計アイコンから最近使った設定を開き、クリックで再適用できます。シャッフルアイコンは設定をランダム化して、手早く探索できます。",
+      },
+      {
+        heading: "ダウンロード (Download)",
+        body: "結果を PNG として書き出します。1x / 2x / 4x は同じ見た目を高解像度でレンダリングします（点の比率は保たれ、プレビューを忠実にスケールアップします）。",
       },
       {
         heading: "ライセンス",
@@ -429,18 +453,19 @@ function App() {
   const [noise, setNoise] = useState(0);
   const [transparentBg, setTransparentBg] = useState(false);
   const [invert, setInvert] = useState(false);
-  const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("fm");
+  const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("am");
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
   const [gamutCutoff, setGamutCutoff] = useState(0.5);
   const [highlightCutoff, setHighlightCutoff] = useState(0);
-  const [paperTexture, setPaperTexture] = useState<PaperTexture>("felt");
+  const [paperTexture, setPaperTexture] = useState<PaperTexture>("none");
   const [paperTextureAmount, setPaperTextureAmount] = useState(0.5);
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("cmyk");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<StencilCanvasHandle>(null);
   const previewRef = useRef<HTMLDivElement>(null);
-  const panzoom = usePanZoom(previewRef);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const panzoom = usePanZoom(previewRef, contentRef);
   const { dark, toggle: toggleTheme } = useTheme();
   const [guideLang, setGuideLang] = useState<GuideLang>("en");
 
@@ -477,18 +502,14 @@ function App() {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  // Compute canvas width that fits within container (accounting for padding)
+  // プレビュー領域（パネルに重ならない残り領域）いっぱいに、幅・高さ両方へフィット
   const canvasWidth = (() => {
     if (!imageAspect) return 600;
-    const pad = isLgLayout ? 48 : 24; // lg:p-6 = 24*2, p-3 = 12*2
-    const availW = containerSize.width - pad;
-    if (!isLgLayout) {
-      // Mobile/tablet: scrollable layout, no height constraint
-      return Math.max(100, Math.min(600, availW));
-    }
-    const availH = containerSize.height - pad;
+    const pad = isLgLayout ? 40 : 24;
+    const availW = Math.max(0, containerSize.width - pad);
+    const availH = Math.max(0, containerSize.height - pad);
     const widthFromHeight = availH * imageAspect;
-    return Math.max(100, Math.min(600, availW, widthFromHeight));
+    return Math.max(100, Math.min(availW, widthFromHeight));
   })();
 
   const handleDownload = async () => {
@@ -623,6 +644,7 @@ function App() {
     invert,
   };
   const { recent, remove: removeRecent } = useRecentSettings(currentSettings);
+  const [recentOpen, setRecentOpen] = useState(false);
 
   const applySettings = (s: StencilSettings) => {
     setColors([...s.colors]);
@@ -655,7 +677,7 @@ function App() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:flex lg:h-screen lg:flex-col lg:overflow-hidden lg:py-6">
+    <div className="checkerboard relative h-[100dvh] w-screen overflow-hidden">
       {/* シャッフルボタンのアイコン用: 青紫のアニメーショングラデーション定義 */}
       <svg
         aria-hidden="true"
@@ -690,118 +712,201 @@ function App() {
           </linearGradient>
         </defs>
       </svg>
-      {/* Header */}
-      <div className="mb-8 flex items-start justify-between lg:mb-4 lg:shrink-0">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Stencil Canvas
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Multi-color stencil print simulator
-          </p>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={randomize}
-            className="h-9 w-9 shrink-0"
-            title="Randomize settings"
+      {/* Preview: 全画面パン/ズーム面（拡大時は印刷物がパネル下へ潜り込む）。
+          padding でデフォルト時の中心/サイズを非パネル領域に合わせる。 */}
+      <div
+        ref={previewRef}
+        className="absolute inset-0 z-0 grid place-items-center overflow-hidden p-4 pb-[calc(56vh+0.5rem)] lg:pb-4 lg:pl-[356px]"
+        style={{
+          touchAction: "none",
+          cursor:
+            panzoom.zoom > 1
+              ? panzoom.dragging
+                ? "grabbing"
+                : "grab"
+              : "default",
+        }}
+        {...panzoom.handlers}
+      >
+        {imageAspect ? (
+          <div
+            ref={contentRef}
+            style={{
+              transform: "var(--pz-transform, none)",
+              transformOrigin: "center center",
+              willChange: "transform",
+              lineHeight: 0,
+            }}
           >
-            <Shuffle
-              className="h-5 w-5"
-              strokeWidth={2.5}
-              style={{ stroke: "url(#shuffleGrad)" }}
+            <StencilCanvas
+              ref={canvasRef}
+              src={imageSrc}
+              colors={colors}
+              width={BASE_WIDTH}
+              dotSize={dotSize}
+              misregistration={misregistration}
+              grain={0}
+              density={density}
+              inkOpacity={inkOpacity}
+              paperColor={paperColor}
+              halftoneMode={halftoneMode}
+              colorMode={colorMode}
+              gamutThreshold={gamutCutoff}
+              highlightCutoff={highlightCutoff}
+              paperTexture={paperTexture}
+              paperTextureAmount={paperTextureAmount}
+              noise={noise}
+              transparentBg={transparentBg}
+              invert={invert}
+              className="shadow-lg"
+              style={{ width: Math.round(canvasWidth), height: "auto" }}
             />
-            <span className="sr-only">Randomize settings</span>
-          </Button>
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0">
-                <Info className="h-4 w-4" />
-                <span className="sr-only">Guide</span>
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-lg">
-              <DialogHeader>
-                <div className="flex items-center justify-between pr-6">
-                  <DialogTitle>{guide[guideLang].title}</DialogTitle>
-                  <button
-                    onClick={() => setGuideLang((l) => (l === "ja" ? "en" : "ja"))}
-                    className="rounded border border-input px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent"
-                  >
-                    {guideLang === "ja" ? "English" : "日本語"}
-                  </button>
-                </div>
-              </DialogHeader>
-              <div className="space-y-4">
-                {guide[guideLang].sections.map((s) => (
-                  <div key={s.heading}>
-                    <h3 className="mb-1 text-sm font-medium">{s.heading}</h3>
-                    <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
-                      {s.body}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </DialogContent>
-          </Dialog>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleTheme}
-            className="h-9 w-9 shrink-0"
-          >
-            {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            <span className="sr-only">Toggle theme</span>
-          </Button>
-        </div>
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground">Loading…</span>
+        )}
       </div>
 
-      <div className="lg:flex lg:min-h-0 lg:flex-1 lg:gap-8">
-        {/* Controls (left on desktop) */}
-        <div className="sidebar-scroll lg:w-80 lg:shrink-0 lg:overflow-y-scroll lg:py-2 lg:pr-6">
-          {/* Recent (最近使った設定のサジェスト) */}
-          {recent.length > 0 && (
-            <section className="mb-6">
-              <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
-                Recent
-              </Label>
-              <div className="flex flex-wrap gap-2">
-                {recent.map((e) => (
-                  <div key={e.id} className="group relative">
-                    <button
-                      onClick={() => applySettings(e.settings)}
-                      title="最近使った設定を適用"
-                      className="flex h-9 items-center gap-2 rounded-full border border-input bg-background px-2.5 text-xs transition-colors hover:border-ring"
-                    >
-                      <span className="flex -space-x-1">
-                        {e.settings.colors.slice(0, 5).map((c, i) => (
-                          <span
-                            key={i}
-                            className="h-3.5 w-3.5 rounded-full border border-background"
-                            style={{ background: c.color }}
-                          />
-                        ))}
-                      </span>
-                      <span className="text-muted-foreground">
-                        {e.settings.dotSize.toFixed(1)}px ·{" "}
-                        {e.settings.halftoneMode === "fm" ? "Density" : "Size"}
-                      </span>
-                    </button>
-                    <button
-                      onClick={() => removeRecent(e.id)}
-                      aria-label="Remove from recent"
-                      className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border border-input bg-background text-[10px] leading-none text-muted-foreground shadow-sm transition-colors hover:text-foreground group-hover:flex"
-                    >
-                      ×
-                    </button>
+      {/* Overlay: コントロールパネル（PC=左 / スマホ=下）＋隅コントロール */}
+      <div className="pointer-events-none absolute inset-0 z-20 flex flex-col-reverse lg:flex-row">
+        {/* Control panel: ガラス面（半透明+blur, ライト/ダーク両対応）＋内側スクロール */}
+        <div className={`pointer-events-auto m-2 flex max-h-[56vh] flex-col overflow-hidden rounded-2xl shadow-xl ${GLASS_SURFACE} lg:m-3 lg:h-[calc(100%-1.5rem)] lg:max-h-none lg:w-[340px] lg:shrink-0`}>
+          <div className="sidebar-scroll flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-4 will-change-scroll [transform:translateZ(0)]">
+          {/* Panel header: タイトル＋操作 / サブタイトル */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between gap-2">
+              <h1 className="text-lg font-semibold tracking-tight">Stencil Canvas</h1>
+              <div className="flex shrink-0 items-center gap-0.5">
+              {/* Recent (履歴) */}
+              <Popover open={recentOpen} onOpenChange={setRecentOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 shrink-0"
+                    title="Recent settings"
+                    disabled={recent.length === 0}
+                  >
+                    <History className="h-4 w-4" />
+                    <span className="sr-only">Recent settings</span>
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-72 p-2">
+                  <div className="mb-1 px-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Recent（新しい順）
                   </div>
-                ))}
-              </div>
-            </section>
-          )}
-
+                  <div className="flex flex-col">
+                    {recent.map((e) => (
+                      <div key={e.id} className="group flex items-center gap-1">
+                        <button
+                          onClick={() => {
+                            applySettings(e.settings);
+                            setRecentOpen(false);
+                          }}
+                          title="この設定を適用"
+                          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-accent"
+                        >
+                          <span className="flex shrink-0 -space-x-1">
+                            {e.settings.colors.slice(0, 5).map((c, i) => (
+                              <span
+                                key={i}
+                                className="h-3.5 w-3.5 rounded-full border border-background"
+                                style={{ background: c.color }}
+                              />
+                            ))}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                            {e.settings.dotSize.toFixed(1)}px ·{" "}
+                            {e.settings.halftoneMode === "fm" ? "Density" : "Size"}
+                          </span>
+                          {e.savedAt > 0 && (
+                            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
+                              {new Date(e.savedAt).toLocaleString(undefined, {
+                                month: "numeric",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => removeRecent(e.id)}
+                          aria-label="Remove from recent"
+                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sm leading-none text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+              {/* Randomize */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={randomize}
+                className="h-9 w-9 shrink-0"
+                title="Randomize settings"
+              >
+                <Shuffle
+                  className="h-5 w-5"
+                  strokeWidth={2.5}
+                  style={{ stroke: "url(#shuffleGrad)" }}
+                />
+                <span className="sr-only">Randomize settings</span>
+              </Button>
+              {/* Guide */}
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0">
+                    <Info className="h-4 w-4" />
+                    <span className="sr-only">Guide</span>
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-h-[85vh] gap-0 overflow-hidden p-0 sm:max-w-lg">
+                  <div className="max-h-[85vh] overflow-y-auto overscroll-contain p-6 will-change-scroll [transform:translateZ(0)]">
+                  <DialogHeader>
+                    <div className="flex items-center justify-between pr-6">
+                      <DialogTitle>{guide[guideLang].title}</DialogTitle>
+                      <button
+                        onClick={() => setGuideLang((l) => (l === "ja" ? "en" : "ja"))}
+                        className="rounded border border-input px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent"
+                      >
+                        {guideLang === "ja" ? "English" : "日本語"}
+                      </button>
+                    </div>
+                  </DialogHeader>
+                  <div className="mt-4 space-y-4">
+                    {guide[guideLang].sections.map((s) => (
+                      <div key={s.heading}>
+                        <h3 className="mb-1 text-sm font-medium">{s.heading}</h3>
+                        <p className="whitespace-pre-line text-xs leading-relaxed text-muted-foreground">
+                          {s.body}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                  </div>
+                </DialogContent>
+              </Dialog>
+              {/* Theme */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleTheme}
+                className="h-9 w-9 shrink-0"
+              >
+                {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                <span className="sr-only">Toggle theme</span>
+              </Button>
+            </div>
+            </div>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Multi-color stencil print simulator
+            </p>
+          </div>
           {/* Image */}
           <section className="mb-6">
             <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
@@ -821,8 +926,12 @@ function App() {
                   checked={invert}
                   onCheckedChange={(v: boolean) => setInvert(v)}
                 />
-                <Label htmlFor="invert" className="text-xs text-muted-foreground">
-                  Invert
+                <Label
+                  htmlFor="invert"
+                  className="text-xs text-muted-foreground"
+                  title="Invert the input image's tones (light ↔ dark) before printing"
+                >
+                  Invert tones
                 </Label>
               </div>
             </div>
@@ -930,7 +1039,18 @@ function App() {
                 <SelectContent>
                   {presetEntries.map(([key, preset]) => (
                     <SelectItem key={key} value={key} className="text-xs">
-                      {preset.name}
+                      <span className="flex items-center gap-2">
+                        <span className="flex shrink-0 -space-x-1">
+                          {preset.colors.map((c, i) => (
+                            <span
+                              key={i}
+                              className="h-3 w-3 rounded-full border border-background"
+                              style={{ background: c.color }}
+                            />
+                          ))}
+                        </span>
+                        {preset.name}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1107,115 +1227,57 @@ function App() {
               </div>
             </div>
           </section>
+          </div>
         </div>
 
-        {/* Preview (right on desktop) */}
-        <div className="mt-8 lg:mt-0 lg:flex lg:flex-1 lg:min-w-0 lg:flex-col">
-          {/* Canvas area (zoom / pan) */}
-          <div
-            ref={previewRef}
-            className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-xl bg-muted/60 p-3 lg:p-6"
-            style={{
-              touchAction: "none",
-              cursor:
-                panzoom.zoom > 1
-                  ? panzoom.dragging
-                    ? "grabbing"
-                    : "grab"
-                  : "default",
-            }}
-            {...panzoom.handlers}
-          >
-            {imageAspect ? (
-              <>
-                <div
-                  style={{
-                    transform: panzoom.transform,
-                    transformOrigin: "center center",
-                    willChange: "transform",
-                    lineHeight: 0,
-                  }}
-                >
-                  <StencilCanvas
-                    ref={canvasRef}
-                    src={imageSrc}
-                    colors={colors}
-                    width={BASE_WIDTH}
-                    dotSize={dotSize}
-                    misregistration={misregistration}
-                    grain={0}
-                    density={density}
-                    inkOpacity={inkOpacity}
-                    paperColor={paperColor}
-                    halftoneMode={halftoneMode}
-                    colorMode={colorMode}
-                    gamutThreshold={gamutCutoff}
-                    highlightCutoff={highlightCutoff}
-                    paperTexture={paperTexture}
-                    paperTextureAmount={paperTextureAmount}
-                    noise={noise}
-                    transparentBg={transparentBg}
-                    invert={invert}
-                    className={transparentBg ? "shadow-lg checkerboard" : "shadow-lg"}
-                    style={{ width: Math.round(canvasWidth), height: "auto" }}
-                  />
-                </div>
-
-                {/* Zoom controls */}
-                <div
-                  className="absolute inset-x-0 bottom-0 flex justify-end p-3"
-                  style={{ pointerEvents: "none" }}
-                >
-                  <div
-                    className="flex items-center gap-0.5 rounded-lg border bg-background/80 p-1 shadow-sm backdrop-blur"
-                    style={{ pointerEvents: "auto" }}
-                    onPointerDown={(e) => e.stopPropagation()}
+        {/* Preview corner controls（非パネル領域）: ズーム左下・ダウンロード右下 */}
+        <div className="pointer-events-none relative flex min-h-0 min-w-0 flex-1">
+          {/* Zoom (bottom-left) */}
+          <div className="pointer-events-none absolute bottom-0 left-0 flex p-3">
+            <div
+              className={`pointer-events-auto flex items-center gap-0.5 rounded-lg p-1 shadow-sm ${GLASS_SURFACE}`}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              {!panzoom.isDefault && (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={panzoom.reset}
+                    aria-label="Reset view"
+                    title="Reset view"
                   >
-                    {!panzoom.isDefault && (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={panzoom.reset}
-                          aria-label="Reset view"
-                          title="Reset view"
-                        >
-                          <Maximize className="h-4 w-4" />
-                        </Button>
-                        <Separator orientation="vertical" className="mx-0.5 h-4" />
-                      </>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={panzoom.zoomOut}
-                      disabled={!panzoom.canZoomOut}
-                      aria-label="Zoom out"
-                    >
-                      <ZoomOut className="h-4 w-4" />
-                    </Button>
-                    <span className="min-w-[3.5ch] text-center text-xs tabular-nums text-muted-foreground">
-                      {Math.round(panzoom.zoom * 100)}%
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={panzoom.zoomIn}
-                      disabled={!panzoom.canZoomIn}
-                      aria-label="Zoom in"
-                    >
-                      <ZoomIn className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <span className="text-xs text-muted-foreground">Loading…</span>
-            )}
+                    <Maximize className="h-4 w-4" />
+                  </Button>
+                  <Separator orientation="vertical" className="mx-0.5 h-4" />
+                </>
+              )}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={panzoom.zoomOut}
+                disabled={!panzoom.canZoomOut}
+                aria-label="Zoom out"
+              >
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+              <span className="min-w-[3.5ch] text-center text-xs tabular-nums text-muted-foreground">
+                {Math.round(panzoom.zoom * 100)}%
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={panzoom.zoomIn}
+                disabled={!panzoom.canZoomIn}
+                aria-label="Zoom in"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
 
-          {/* Download bar: always visible */}
-          <div className="mt-4 flex shrink-0 items-center justify-center gap-2 sm:justify-end">
+          {/* Download (bottom-right) */}
+          <div className={`pointer-events-auto absolute bottom-3 right-3 flex items-center gap-2 rounded-lg p-1.5 shadow-sm ${GLASS_SURFACE}`}>
             <Select value={downloadScale} onValueChange={setDownloadScale}>
               <SelectTrigger className="h-9 w-28 text-xs">
                 <SelectValue />
@@ -1239,7 +1301,7 @@ function App() {
         </div>
       </div>
 
-      <footer className="mt-10 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground/50 lg:shrink-0">
+      <footer className="pointer-events-none absolute bottom-2 right-3 z-10 hidden items-center justify-center gap-1.5 text-[11px] text-muted-foreground/50 lg:flex [&_a]:pointer-events-auto">
         <span>&copy; yukiyokotani</span>
         <span>&middot;</span>
         <a

@@ -541,13 +541,18 @@ export function computeStencil(
     applyBoldTransform(densityMaps, pixelCount, residuals, gamutThreshold);
   }
 
-  // ハイライトのクリップ: ごく低い濃度（ほぼ白）を 0 にして、
+  // ハイライトのクリップ（レベル補正）: しきい値未満のごく低い濃度（ほぼ白）を 0 にして、
   // わずかに色づいた画素が網点として散る（端のノイズ）のを防ぐ。
-  if (highlightCutoff > 0) {
+  // 単純な 0 クリップだと、しきい値直上の濃度がいきなり中サイズのドットになり、
+  // ハイライトの階調が「ドットの有無（密度）」で表現されてしまう。
+  // 代わりに [cutoff, 1] を [0, 1] へ線形リマップし、しきい値直上を極小ドットから
+  // 滑らかにサイズ成長させる（＝ AM のサイズ変調でハイライトの勾配を表現する）。
+  if (highlightCutoff > 0 && highlightCutoff < 1) {
+    const invRange = 1 / (1 - highlightCutoff);
     for (let ci = 0; ci < densityMaps.length; ci++) {
       const m = densityMaps[ci];
       for (let p = 0; p < pixelCount; p++) {
-        if (m[p] < highlightCutoff) m[p] = 0;
+        m[p] = m[p] <= highlightCutoff ? 0 : (m[p] - highlightCutoff) * invRange;
       }
     }
   }
