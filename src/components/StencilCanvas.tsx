@@ -35,6 +35,7 @@ export interface StencilCanvasProps {
   halftoneMode?: HalftoneMode;
   colorMode?: ColorMode;
   gamutThreshold?: number;
+  blackGeneration?: number;
   highlightCutoff?: number;
   paperTexture?: PaperTexture;
   paperTextureAmount?: number;
@@ -66,6 +67,7 @@ export const StencilCanvas = forwardRef<
     halftoneMode,
     colorMode,
     gamutThreshold = 0.5,
+    blackGeneration = 0.7,
     highlightCutoff = 0,
     paperTexture = "felt",
     paperTextureAmount = 0.5,
@@ -127,7 +129,7 @@ export const StencilCanvas = forwardRef<
 
   // 処理パラメータのキーを生成し、完了キーと比較して processing を派生
   const paramsKey = [
-    dotSize, density, inkOpacity, halftoneMode, colorMode, gamutThreshold, highlightCutoff, paperTexture, paperTextureAmount, noise, misregistration,
+    dotSize, density, inkOpacity, halftoneMode, colorMode, gamutThreshold, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, misregistration,
     transparentBg, invert, paperColor, grain,
     colors.map((c) => c.color).join(","),
   ].join("|");
@@ -137,11 +139,11 @@ export const StencilCanvas = forwardRef<
 
   // 最新パラメータを ref で保持
   const paramsRef = useRef({
-    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert,
+    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert,
   });
   useEffect(() => {
     paramsRef.current = {
-      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert,
+      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert,
     };
   });
 
@@ -165,6 +167,7 @@ export const StencilCanvas = forwardRef<
           halftoneMode: p.halftoneMode,
           colorMode: p.colorMode,
           gamutThreshold: p.gamutThreshold,
+          blackGeneration: p.blackGeneration,
           highlightCutoff: p.highlightCutoff,
           paperTexture: p.paperTexture,
           paperTextureAmount: p.paperTextureAmount,

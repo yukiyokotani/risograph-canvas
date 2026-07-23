@@ -17,6 +17,7 @@ export interface StencilSettings {
   halftoneMode: HalftoneMode;
   colorMode: ColorMode;
   gamutCutoff: number;
+  blackGeneration?: number;
   highlightCutoff: number;
   paperTexture: PaperTexture;
   paperTextureAmount: number;
