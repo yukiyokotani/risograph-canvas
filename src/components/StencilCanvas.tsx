@@ -63,7 +63,7 @@ export const StencilCanvas = forwardRef<
     halftoneMode,
     colorMode,
     gamutThreshold = 0.5,
-    highlightCutoff = 0.06,
+    highlightCutoff = 0,
     noise = 0,
     transparentBg = false,
     invert = false,
