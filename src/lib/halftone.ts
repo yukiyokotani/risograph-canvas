@@ -19,9 +19,33 @@ export interface HalftoneOptions {
 }
 
 /**
+ * ドットの見かけの大きさ（セルサイズ, px）に応じてスーパーサンプル数を決める。
+ * 小さいドットほど 1px あたりのサンプルを増やし、どのドットも同じ形・大きさの
+ * 真円として均一に整列して見えるようにする（1 サンプル/px だとドットごとに
+ * 画素グリッドとのズレで四角や菱形に化けて「バラつき」が出る）。
+ */
+function superSamples(cellSize: number): number {
+  if (cellSize >= 9) return 2;
+  if (cellSize >= 4.5) return 3;
+  return 4;
+}
+
+/**
+ * AM ドットの径写像の定数。
+ * DOT_FILL_D … この濃度で円がセルに内接（r=0.5·cell, 被覆率 π/4）。これ未満は
+ *   「重なり無し」領域として面積＝被覆率になる写像を使う。
+ * DOT_MAX_R … 濃度 1 での最大半径（×cell）。1/√2≈0.707 でセルを完全被覆（ベタ）。
+ *   ベタまで行くと網点構造が消えるため、あえて手前で止めて最暗部でも
+ *   ドットの隙間（地の抜け）が残るようにする。0.54≈被覆率 85%。
+ */
+const DOT_FILL_D = Math.PI / 4; // ≒0.785
+const DOT_MAX_R = 0.54;
+
+/**
  * AM ハーフトーン: ドット中心の濃度でドットサイズを決定し、常に真円を描画する。
- * 各ピクセルについて周囲のグリッドセルを探索し、
- * セル中心の濃度からドット半径を算出してカバレッジを計算する。
+ * 各ピクセルを SS×SS のサブサンプルで評価し、真円内に入るサブサンプルの割合を
+ * カバレッジとする（アナリティックなアンチエイリアス）。これによりドットサイズに
+ * かかわらず均一で滑らかな円が規則正しい格子に整列する。
  */
 function applyAMHalftone(
   densityMap: Float32Array,
@@ -38,82 +62,81 @@ function applyAMHalftone(
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
 
-  // アンチエイリアスの縁幅 (ピクセル単位)
-  const edge = 0.5;
+  const SS = superSamples(cellSize);
+  const inv = 1 / SS;
+  const ss2 = SS * SS;
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
+      let covered = 0;
 
-      // 回転座標系に変換
-      const rx = x * cos + y * sin;
-      const ry = -x * sin + y * cos;
+      // ピクセル内を SS×SS 均等サンプル
+      for (let syi = 0; syi < SS; syi++) {
+        for (let sxi = 0; sxi < SS; sxi++) {
+          const px = x + (sxi + 0.5) * inv - 0.5;
+          const py = y + (syi + 0.5) * inv - 0.5;
 
-      // 回転グリッド上のセル座標
-      const gx = Math.floor(rx / cellSize);
-      const gy = Math.floor(ry / cellSize);
+          // 回転座標系に変換
+          const rx = px * cos + py * sin;
+          const ry = -px * sin + py * cos;
 
-      let maxOpacity = 0;
+          // 回転グリッド上のセル座標
+          const gx = Math.floor(rx / cellSize);
+          const gy = Math.floor(ry / cellSize);
 
-      // 周囲のセルを探索（最大ドット半径 = 0.5 * cellSize なのでrange=1で十分）
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const cx = gx + dx;
-          const cy = gy + dy;
+          // 周囲セルのドットいずれかに含まれれば被覆
+          let inside = false;
+          for (let dy = -1; dy <= 1 && !inside; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const cx = gx + dx;
+              const cy = gy + dy;
 
-          // ドット中心（回転座標系）
-          const dotRx = (cx + 0.5) * cellSize;
-          const dotRy = (cy + 0.5) * cellSize;
+              // ドット中心（回転座標系）
+              const dotRx = (cx + 0.5) * cellSize;
+              const dotRy = (cy + 0.5) * cellSize;
 
-          // ドット中心を画像座標に逆変換して濃度をサンプリング
-          const imgX = Math.round(dotRx * cos - dotRy * sin);
-          const imgY = Math.round(dotRx * sin + dotRy * cos);
+              // ドット中心を画像座標に逆変換して濃度をサンプリング
+              const imgX = Math.round(dotRx * cos - dotRy * sin);
+              const imgY = Math.round(dotRx * sin + dotRy * cos);
 
-          let d: number;
-          if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
-            d = densityMap[imgY * width + imgX];
-          } else {
-            d = 0;
+              let d: number;
+              if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
+                d = densityMap[imgY * width + imgX];
+              } else {
+                d = 0;
+              }
+              d = Math.min(d * scale, 1);
+              if (d < 0.001) continue;
+
+              // ドット中心の濃度 → ドット半径（ピクセル単位）。
+              // 被覆率が濃度 d に一致するよう写像し、d→1 で隣接ドットが融合して
+              // 最大被覆率（DOT_MAX_R≒85%）まで太らせる。
+              // 従来は 0.5·cell 止まりで最大でも内接円＝被覆率 π/4≒78% が上限となり、
+              // 暗部が頭打ちで「サイズ変調のレンジが狭い」原因になっていた。
+              let radius: number;
+              if (d <= DOT_FILL_D) {
+                // 重なり無し領域: 円の面積 = 被覆率 d（r = √(d/π)·cell）
+                radius = Math.sqrt(d / Math.PI) * cellSize;
+              } else {
+                // d: DOT_FILL_D→1 を 半径 0.5·cell→DOT_MAX_R·cell へ。
+                // 隣接円が重なり合い、被覆率が滑らかに最大値へ向かう。
+                const t = (d - DOT_FILL_D) / (1 - DOT_FILL_D);
+                radius = (0.5 + t * (DOT_MAX_R - 0.5)) * cellSize;
+              }
+
+              const ddx = rx - dotRx;
+              const ddy = ry - dotRy;
+              if (ddx * ddx + ddy * ddy <= radius * radius) {
+                inside = true;
+                break;
+              }
+            }
           }
-          d = Math.min(d * scale, 1);
-          if (d < 0.001) continue;
-
-          // ドット中心の濃度からドット半径を決定（ピクセル単位）
-          const radius = Math.sqrt(d) * 0.5 * cellSize;
-
-          // ピクセルからドット中心への距離
-          const distX = rx - dotRx;
-          const distY = ry - dotRy;
-          const dist = Math.sqrt(distX * distX + distY * distY);
-
-          if (dist > radius + edge) continue;
-
-          // アンチエイリアスを含む不透明度計算
-          let opacity: number;
-          if (dist < radius - edge) {
-            opacity = 1;
-          } else {
-            opacity = 1 - (dist - (radius - edge)) / (2 * edge);
-          }
-
-          // ピーク正規化: radius < edge のとき中心でも opacity < 1 になるのを補正
-          if (radius < edge) {
-            const peak = 0.5 + radius / (2 * edge);
-            opacity = Math.min(1, opacity / peak);
-          }
-
-          // サブピクセル補正: ドット半径が 1px 未満の場合、
-          // 物理的にこれ以上小さくできないため透明度で拡張
-          if (radius < 1.0) {
-            const blend = 1 - radius;
-            opacity *= 1 - blend * (1 - Math.sqrt(d));
-          }
-
-          maxOpacity = Math.max(maxOpacity, opacity);
+          if (inside) covered++;
         }
       }
 
-      result[idx] = maxOpacity;
+      result[y * width + x] = covered / ss2;
     }
   }
 
@@ -149,93 +172,69 @@ function applyFMHalftone(
 
   const cellSize = dotSize;
   // ドット半径 = セルサイズの半分（ドット直径 = セルサイズ）
-  // 高濃度でのベタ塗りは solidBlend で処理する
   const dotRadius = dotSize * 0.5;
-  const edge = Math.max(0.5, 0.5 / dotSize);
 
-  // ドット中心でのピーク不透明度（radius < edge のとき 1.0 未満になる）
-  // 正規化して中心が常に 1.0 になるようにする
-  const peakOpacity = Math.min(1, 0.5 + dotRadius / (2 * edge));
-
-  // サブピクセル透明度補正の強さ (dotRadius < 1px で有効)
-  // dotRadius=0 → 1 (全面補正), dotRadius=1 → 0 (補正なし)
-  const subPixelBlend = Math.max(0, 1 - dotRadius);
+  const SS = superSamples(cellSize);
+  const inv = 1 / SS;
+  const ss2 = SS * SS;
+  const searchRange = Math.max(1, Math.ceil(dotRadius / cellSize));
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
+      let covered = 0;
 
-      // 回転座標系に変換
-      const rx = x * cos + y * sin;
-      const ry = -x * sin + y * cos;
+      for (let syi = 0; syi < SS; syi++) {
+        for (let sxi = 0; sxi < SS; sxi++) {
+          const px = x + (sxi + 0.5) * inv - 0.5;
+          const py = y + (syi + 0.5) * inv - 0.5;
 
-      // 回転グリッド上のセル
-      const gx = Math.floor(rx / cellSize);
-      const gy = Math.floor(ry / cellSize);
+          // 回転座標系に変換
+          const rx = px * cos + py * sin;
+          const ry = -px * sin + py * cos;
 
-      let maxOpacity = 0;
+          // 回転グリッド上のセル
+          const gx = Math.floor(rx / cellSize);
+          const gy = Math.floor(ry / cellSize);
 
-      // ドットの影響範囲に応じて探索範囲を動的に決定
-      // サブピクセルサイズではドットのアンチエイリアス領域が
-      // 複数セルにまたがるため、広い範囲を確認する必要がある
-      const searchRange = Math.ceil((dotRadius + edge) / cellSize);
-      for (let dy = -searchRange; dy <= searchRange; dy++) {
-        for (let dx = -searchRange; dx <= searchRange; dx++) {
-          const cx = gx + dx;
-          const cy = gy + dy;
+          let inside = false;
+          for (let dy = -searchRange; dy <= searchRange && !inside; dy++) {
+            for (let dx = -searchRange; dx <= searchRange; dx++) {
+              const cx = gx + dx;
+              const cy = gy + dy;
 
-          // ドット中心（回転座標系）
-          const dotRx = (cx + 0.5) * cellSize;
-          const dotRy = (cy + 0.5) * cellSize;
+              // ドット中心（回転座標系）
+              const dotRx = (cx + 0.5) * cellSize;
+              const dotRy = (cy + 0.5) * cellSize;
 
-          // ピクセルからドット中心への距離
-          const distX = rx - dotRx;
-          const distY = ry - dotRy;
-          const dist = Math.sqrt(distX * distX + distY * distY);
+              const ddx = rx - dotRx;
+              const ddy = ry - dotRy;
+              if (ddx * ddx + ddy * ddy > dotRadius * dotRadius) continue;
 
-          if (dist > dotRadius + edge) continue;
+              // ドット中心を画像座標に逆変換して濃度をサンプリング
+              const imgX = Math.round(dotRx * cos - dotRy * sin);
+              const imgY = Math.round(dotRx * sin + dotRy * cos);
 
-          // ドット中心を画像座標に逆変換して濃度をサンプリング
-          const imgX = Math.round(dotRx * cos - dotRy * sin);
-          const imgY = Math.round(dotRx * sin + dotRy * cos);
+              let d: number;
+              if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
+                d = densityMap[imgY * width + imgX];
+              } else {
+                d = 0;
+              }
+              d = Math.min(d * scale, 1);
 
-          let d: number;
-          if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
-            d = densityMap[imgY * width + imgX];
-          } else {
-            d = 0;
+              // セルのハッシュ閾値と比較してドットの有無を決定
+              const threshold = cellHash(cx, cy);
+              if (d <= threshold) continue;
+
+              inside = true;
+              break;
+            }
           }
-          d = Math.min(d * scale, 1);
-
-          // セルのハッシュ閾値と比較してドットの有無を決定
-          const threshold = cellHash(cx, cy);
-          if (d <= threshold) continue;
-
-          // アンチエイリアスを含む不透明度計算
-          let opacity: number;
-          if (dist < dotRadius - edge) {
-            opacity = 1;
-          } else {
-            opacity = 1 - (dist - (dotRadius - edge)) / (2 * edge);
-          }
-
-          // ピーク正規化: radius < edge のとき中心でも opacity < 1 になるのを補正
-          if (peakOpacity < 1) {
-            opacity = Math.min(1, opacity / peakOpacity);
-          }
-
-          // サブピクセル補正: ドットが物理的に小さくできない場合、
-          // 透明度で濃度の微細な違いを表現する
-          // dotRadius >= 1px では補正なし（均一濃度）
-          if (subPixelBlend > 0) {
-            opacity *= 1 - subPixelBlend * (1 - Math.sqrt(d));
-          }
-
-          maxOpacity = Math.max(maxOpacity, opacity);
+          if (inside) covered++;
         }
       }
 
-      result[idx] = maxOpacity;
+      result[y * width + x] = covered / ss2;
     }
   }
 

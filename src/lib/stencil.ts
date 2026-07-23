@@ -10,6 +10,8 @@ import { applyHalftone, type HalftoneMode } from "./halftone";
 
 export type { HalftoneMode };
 export type ColorMode = "natural" | "bold";
+/** 紙テクスチャの種類 */
+export type PaperTexture = "none" | "felt" | "fiber";
 
 /** ImageData 互換の軽量インターフェース（Web Worker でも使える） */
 export interface ImageDataLike {
@@ -74,6 +76,10 @@ export interface StencilOptions {
    * 同じシードならプレビューと出力で版ずれが完全に一致する。
    */
   seed?: number;
+  /** 紙テクスチャの種類。デフォルト: "fiber" */
+  paperTexture?: PaperTexture;
+  /** 紙テクスチャの強さ (0–1)。デフォルト: 0.5。0 または type="none" で無効 */
+  paperTextureAmount?: number;
 }
 
 /** 掠れノイズ用ハッシュ（セル座標+シード → [0,1)） */
@@ -102,6 +108,124 @@ function smoothNoise(x: number, y: number, cellSize: number, seed: number): numb
 
   return (n00 * (1 - sx) + n10 * sx) * (1 - sy) +
          (n01 * (1 - sx) + n11 * sx) * sy;
+}
+
+/** 異方性スムースノイズ（x/y で別セルサイズ）。繊維の向きを作るのに使う。 */
+function smoothNoiseAniso(
+  x: number,
+  y: number,
+  cellX: number,
+  cellY: number,
+  seed: number
+): number {
+  const gx = Math.floor(x / cellX);
+  const gy = Math.floor(y / cellY);
+  const fx = x / cellX - gx;
+  const fy = y / cellY - gy;
+  const n00 = scuffHash(gx, gy, seed);
+  const n10 = scuffHash(gx + 1, gy, seed);
+  const n01 = scuffHash(gx, gy + 1, seed);
+  const n11 = scuffHash(gx + 1, gy + 1, seed);
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  return (n00 * (1 - sx) + n10 * sx) * (1 - sy) +
+         (n01 * (1 - sx) + n11 * sx) * sy;
+}
+
+/**
+ * 繊維場: 指定した各方向に細長く伸びた異方性ノイズ（along:繊維長, across:繊維幅）を
+ * 重ね、繊維が絡み合う地合いを作る。角度の与え方で「多方向マット（felt）」から
+ * 「一方向に流れる漉き紙（fiber）」まで表現を切り替えられる。
+ */
+function fiberField(
+  x: number,
+  y: number,
+  seed: number,
+  angles: number[],
+  along: number,
+  across: number
+): number {
+  let f = 0;
+  for (let i = 0; i < angles.length; i++) {
+    const r = (angles[i] * Math.PI) / 180;
+    const c = Math.cos(r);
+    const s = Math.sin(r);
+    const xr = x * c + y * s;
+    const yr = -x * s + y * c;
+    f += smoothNoiseAniso(xr, yr, along, across, seed + i * 23) - 0.5;
+  }
+  return f / angles.length;
+}
+
+/** 2 オクターブの微細グレイン（紙の tooth）。高周波を混ぜて粒立ちを細かくする。 */
+function grain2(x: number, y: number, rs: number, seed: number): number {
+  const a = smoothNoise(x, y, Math.max(1.4 * rs, 1), seed) - 0.5;
+  const b = smoothNoise(x, y, Math.max(0.7 * rs, 1), seed + 7) - 0.5;
+  return a * 0.62 + b * 0.38;
+}
+
+/**
+ * 散在する暗い斑点（繊維片/夾雑物）。細かい場の上位数%だけを暗点にし、
+ * 再生紙のような「ポツポツした繊維片」を表現する。まれに明るい斑点も混ぜる。
+ * 戻り値はおおよそ -1〜+0.4（負が暗点）。
+ */
+function speckField(x: number, y: number, rs: number, seed: number): number {
+  const c = Math.max(1.1 * rs, 1);
+  let s = 0;
+  const n = smoothNoise(x, y, c, seed + 311);
+  if (n > 0.9) s -= (n - 0.9) / 0.1; // 上位10%を暗点に
+  const n2 = smoothNoise(x, y, c, seed + 913);
+  if (n2 > 0.95) s += ((n2 - 0.95) / 0.05) * 0.4; // まれに明点
+  return s;
+}
+
+/** 縦に引き延ばした尾根状ノイズで、紙の皺（クリンクル）の筋を作る。 */
+function crinkle(x: number, y: number, rs: number, seed: number): number {
+  const n = smoothNoiseAniso(x, y, 2.4 * rs, 8 * rs, seed + 55);
+  return 1 - Math.abs(2 * n - 1) - 0.5; // -0.5〜0.5 の尾根
+}
+
+/**
+ * 紙テクスチャの明度(l)と暖色ムラ(w)を返す（おおよそ -1〜1）。
+ *
+ * fiber … 縦の細い繊維＋クリンクルの水彩紙風、felt … 均一な細粒＋繊維片の再生紙風。
+ * どちらも微細グレイン（{@link grain2}）と散在する斑点（{@link speckField}）を重ねて
+ * 実紙の粒立ちを出し、雲状ムラは脇役に留めて「もや」に見せない。
+ * すべての特徴サイズを renderScale 倍にして、プレビューと高解像度出力で見た目を揃える。
+ */
+function paperTextureAt(
+  x: number,
+  y: number,
+  type: PaperTexture,
+  rs: number,
+  seed: number
+): { l: number; w: number } {
+  if (type === "none") return { l: 0, w: 0 };
+  const cloud = smoothNoise(x, y, 50 * rs, seed + 1) - 0.5;
+  const g = grain2(x, y, rs, seed);
+  const sp = speckField(x, y, rs, seed);
+
+  let l: number;
+  let speckAmt: number;
+  if (type === "fiber") {
+    // 水彩紙: 縦の細い繊維（短めで不規則）＋クリンクルの筋
+    const fiber = fiberField(x, y, seed, [86, 94, 79], 13 * rs, 1.25 * rs);
+    const cr = crinkle(x, y, rs, seed);
+    l = fiber * 1.0 + cr * 0.6 + g * 0.55 + cloud * 0.25;
+    speckAmt = 0.35;
+  } else {
+    // felt(再生紙): 均一な細粒＋ゆるい多方向繊維、斑点を強めに
+    const fiber = fiberField(x, y, seed, [0, 90, 45, -40], 9 * rs, 2.2 * rs);
+    l = g * 0.85 + fiber * 0.6 + cloud * 0.3;
+    speckAmt = 1.0;
+  }
+
+  // 軽いコントラストで平坦なグレーを避けてから、暗点（斑点）を重ねる
+  l = Math.sign(l) * Math.pow(Math.abs(l), 0.92);
+  l += sp * speckAmt;
+  const w = cloud * 0.5;
+
+  return { l, w };
 }
 
 /**
@@ -271,7 +395,12 @@ function applyBoldTransform(
   const n = maps.length;
   if (n === 0) return;
 
-  const SUPPRESSION_POWER = 2.0;
+  // 競合抑制の強さ。大きいほど従属インクを強く殺す。
+  // 2.0 は殺しすぎで、従属インク（例: 青地の上の赤）が「勝つ場所にだけ現れる
+  // パッチ＝密度表現」になり、グラデーションがドットサイズ変調で滑らかに出ない。
+  // 0.6 に緩めて従属インクを残し、滑らかなサイズ変調グラデーションを保つ。
+  // Bold らしさ（色分離の強さ）はシグモイドとガモット外カットが担うため維持される。
+  const SUPPRESSION_POWER = 0.6;
   const SIGMOID_GAIN = 6.0;
   const SIGMOID_MID = 0.35;
 
@@ -333,7 +462,7 @@ export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;
@@ -572,15 +701,31 @@ export function computeStencil(
     const pR = paper.r - 255;
     const pG = paper.g - 255;
     const pB = paper.b - 255;
-    // 白紙なら pR=pG=pB=0 で乗算結果がそのまま出る（従来と同等）
-    if (pR !== 0 || pG !== 0 || pB !== 0) {
+    // 紙テクスチャ: 紙が見える部分（インクの無い所）に明度ムラを加える
+    const texOn = paperTexture !== "none" && paperTextureAmount > 0;
+    const texAmp = paperTextureAmount * 18; // amount=1 で ±18 程度の明度振れ
+    // 白紙かつテクスチャ無しなら乗算結果がそのまま出る（従来と同等）
+    if (pR !== 0 || pG !== 0 || pB !== 0 || texOn) {
       for (let i = 0; i < pixelCount; i++) {
         const invA = 1 - alphaMap[i];
         if (invA < 0.004) continue; // 完全カバー → 乗算結果のまま
         const off = i * 4;
-        out[off] = Math.max(0, Math.min(255, Math.round(out[off] + pR * invA)));
-        out[off + 1] = Math.max(0, Math.min(255, Math.round(out[off + 1] + pG * invA)));
-        out[off + 2] = Math.max(0, Math.min(255, Math.round(out[off + 2] + pB * invA)));
+        let addR = pR * invA;
+        let addG = pG * invA;
+        let addB = pB * invA;
+        if (texOn) {
+          const x = i % width;
+          const y = (i / width) | 0;
+          const { l, w } = paperTextureAt(x, y, paperTexture, renderScale, rngSeed);
+          const t = l * texAmp * invA;
+          const wt = w * texAmp * 0.4 * invA; // 暖色ムラ: R を上げ B を下げる
+          addR += t + wt;
+          addG += t;
+          addB += t - wt;
+        }
+        out[off] = Math.max(0, Math.min(255, Math.round(out[off] + addR)));
+        out[off + 1] = Math.max(0, Math.min(255, Math.round(out[off + 1] + addG)));
+        out[off + 2] = Math.max(0, Math.min(255, Math.round(out[off + 2] + addB)));
       }
     }
   }

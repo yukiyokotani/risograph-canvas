@@ -11,6 +11,7 @@ import {
   type StencilOptions,
   type HalftoneMode,
   type ColorMode,
+  type PaperTexture,
 } from "./lib/stencil";
 import {
   Download,
@@ -24,6 +25,10 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { usePanZoom } from "./hooks/usePanZoom";
+import {
+  useRecentSettings,
+  type StencilSettings,
+} from "./hooks/useRecentSettings";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -428,6 +433,8 @@ function App() {
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
   const [gamutCutoff, setGamutCutoff] = useState(0.5);
   const [highlightCutoff, setHighlightCutoff] = useState(0);
+  const [paperTexture, setPaperTexture] = useState<PaperTexture>("felt");
+  const [paperTextureAmount, setPaperTextureAmount] = useState(0.5);
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("cmyk");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -518,6 +525,8 @@ function App() {
         colorMode,
         gamutThreshold: gamutCutoff,
         highlightCutoff,
+        paperTexture,
+        paperTextureAmount,
         noise,
         transparentBg,
         invert,
@@ -591,6 +600,47 @@ function App() {
     setHalftoneMode(pick<HalftoneMode>(["fm", "am"]));
     setColorMode(pick<ColorMode>(["natural", "bold"]));
     setGamutCutoff(pick([0.3, 0.5, 0.7]));
+    setPaperTexture(pick<PaperTexture>(["felt", "fiber", "none"]));
+    setPaperTextureAmount(pick([0.3, 0.5, 0.7]));
+  };
+
+  // 「最近使った設定」（localStorage）。明示的な保存ではなくサジェスト用。
+  const currentSettings: StencilSettings = {
+    colors,
+    dotSize,
+    misregistration,
+    density,
+    inkOpacity,
+    paperColor,
+    halftoneMode,
+    colorMode,
+    gamutCutoff,
+    highlightCutoff,
+    paperTexture,
+    paperTextureAmount,
+    noise,
+    transparentBg,
+    invert,
+  };
+  const { recent, remove: removeRecent } = useRecentSettings(currentSettings);
+
+  const applySettings = (s: StencilSettings) => {
+    setColors([...s.colors]);
+    setDotSize(s.dotSize);
+    setMisregistration(s.misregistration);
+    setDensity(s.density);
+    setInkOpacity(s.inkOpacity);
+    setPaperColor(s.paperColor);
+    setHalftoneMode(s.halftoneMode);
+    setColorMode(s.colorMode);
+    setGamutCutoff(s.gamutCutoff);
+    setHighlightCutoff(s.highlightCutoff);
+    setPaperTexture(s.paperTexture);
+    setPaperTextureAmount(s.paperTextureAmount);
+    setNoise(s.noise);
+    setTransparentBg(s.transparentBg);
+    setInvert(s.invert);
+    setPresetKey("");
   };
 
   const removeColor = (index: number) => {
@@ -711,6 +761,47 @@ function App() {
       <div className="lg:flex lg:min-h-0 lg:flex-1 lg:gap-8">
         {/* Controls (left on desktop) */}
         <div className="sidebar-scroll lg:w-80 lg:shrink-0 lg:overflow-y-scroll lg:py-2 lg:pr-6">
+          {/* Recent (最近使った設定のサジェスト) */}
+          {recent.length > 0 && (
+            <section className="mb-6">
+              <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
+                Recent
+              </Label>
+              <div className="flex flex-wrap gap-2">
+                {recent.map((e) => (
+                  <div key={e.id} className="group relative">
+                    <button
+                      onClick={() => applySettings(e.settings)}
+                      title="最近使った設定を適用"
+                      className="flex h-9 items-center gap-2 rounded-full border border-input bg-background px-2.5 text-xs transition-colors hover:border-ring"
+                    >
+                      <span className="flex -space-x-1">
+                        {e.settings.colors.slice(0, 5).map((c, i) => (
+                          <span
+                            key={i}
+                            className="h-3.5 w-3.5 rounded-full border border-background"
+                            style={{ background: c.color }}
+                          />
+                        ))}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {e.settings.dotSize.toFixed(1)}px ·{" "}
+                        {e.settings.halftoneMode === "fm" ? "Density" : "Size"}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => removeRecent(e.id)}
+                      aria-label="Remove from recent"
+                      className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border border-input bg-background text-[10px] leading-none text-muted-foreground shadow-sm transition-colors hover:text-foreground group-hover:flex"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Image */}
           <section className="mb-6">
             <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
@@ -773,6 +864,43 @@ function App() {
                   Transparent
                 </Label>
               </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div>
+                <Label className="mb-2 text-xs text-muted-foreground">Texture</Label>
+                <Select
+                  value={paperTexture}
+                  onValueChange={(v) => setPaperTexture(v as PaperTexture)}
+                  disabled={transparentBg}
+                >
+                  <SelectTrigger className="h-9 w-full text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none" className="text-xs">None</SelectItem>
+                    <SelectItem value="felt" className="text-xs">Felt</SelectItem>
+                    <SelectItem value="fiber" className="text-xs">Fiber</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {paperTexture !== "none" && (
+                <div>
+                  <Label className="mb-2 text-xs text-muted-foreground">
+                    Texture amount
+                  </Label>
+                  <Slider
+                    value={[paperTextureAmount]}
+                    onValueChange={([v]) => setPaperTextureAmount(v)}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    className="mt-2"
+                  />
+                  <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+                    {Math.round(paperTextureAmount * 100)}%
+                  </span>
+                </div>
+              )}
             </div>
           </section>
 
@@ -1023,6 +1151,8 @@ function App() {
                     colorMode={colorMode}
                     gamutThreshold={gamutCutoff}
                     highlightCutoff={highlightCutoff}
+                    paperTexture={paperTexture}
+                    paperTextureAmount={paperTextureAmount}
                     noise={noise}
                     transparentBg={transparentBg}
                     invert={invert}
