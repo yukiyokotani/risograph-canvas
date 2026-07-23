@@ -24,6 +24,10 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { usePanZoom } from "./hooks/usePanZoom";
+import {
+  useRecentSettings,
+  type StencilSettings,
+} from "./hooks/useRecentSettings";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -593,6 +597,41 @@ function App() {
     setGamutCutoff(pick([0.3, 0.5, 0.7]));
   };
 
+  // 「最近使った設定」（localStorage）。明示的な保存ではなくサジェスト用。
+  const currentSettings: StencilSettings = {
+    colors,
+    dotSize,
+    misregistration,
+    density,
+    inkOpacity,
+    paperColor,
+    halftoneMode,
+    colorMode,
+    gamutCutoff,
+    highlightCutoff,
+    noise,
+    transparentBg,
+    invert,
+  };
+  const { recent, remove: removeRecent } = useRecentSettings(currentSettings);
+
+  const applySettings = (s: StencilSettings) => {
+    setColors([...s.colors]);
+    setDotSize(s.dotSize);
+    setMisregistration(s.misregistration);
+    setDensity(s.density);
+    setInkOpacity(s.inkOpacity);
+    setPaperColor(s.paperColor);
+    setHalftoneMode(s.halftoneMode);
+    setColorMode(s.colorMode);
+    setGamutCutoff(s.gamutCutoff);
+    setHighlightCutoff(s.highlightCutoff);
+    setNoise(s.noise);
+    setTransparentBg(s.transparentBg);
+    setInvert(s.invert);
+    setPresetKey("");
+  };
+
   const removeColor = (index: number) => {
     setColors((prev) => prev.filter((_, i) => i !== index));
   };
@@ -711,6 +750,47 @@ function App() {
       <div className="lg:flex lg:min-h-0 lg:flex-1 lg:gap-8">
         {/* Controls (left on desktop) */}
         <div className="sidebar-scroll lg:w-80 lg:shrink-0 lg:overflow-y-scroll lg:py-2 lg:pr-6">
+          {/* Recent (最近使った設定のサジェスト) */}
+          {recent.length > 0 && (
+            <section className="mb-6">
+              <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
+                Recent
+              </Label>
+              <div className="flex flex-wrap gap-2">
+                {recent.map((e) => (
+                  <div key={e.id} className="group relative">
+                    <button
+                      onClick={() => applySettings(e.settings)}
+                      title="最近使った設定を適用"
+                      className="flex h-9 items-center gap-2 rounded-full border border-input bg-background px-2.5 text-xs transition-colors hover:border-ring"
+                    >
+                      <span className="flex -space-x-1">
+                        {e.settings.colors.slice(0, 5).map((c, i) => (
+                          <span
+                            key={i}
+                            className="h-3.5 w-3.5 rounded-full border border-background"
+                            style={{ background: c.color }}
+                          />
+                        ))}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {e.settings.dotSize.toFixed(1)}px ·{" "}
+                        {e.settings.halftoneMode === "fm" ? "Density" : "Size"}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => removeRecent(e.id)}
+                      aria-label="Remove from recent"
+                      className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full border border-input bg-background text-[10px] leading-none text-muted-foreground shadow-sm transition-colors hover:text-foreground group-hover:flex"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Image */}
           <section className="mb-6">
             <Label className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
