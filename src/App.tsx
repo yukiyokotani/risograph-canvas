@@ -615,7 +615,7 @@ function App() {
             x1="0"
             y1="0"
             x2="16"
-            y2="16"
+            y2="0"
             spreadMethod="repeat"
           >
             <stop offset="0%" stopColor="#2563eb" />
@@ -625,7 +625,7 @@ function App() {
               attributeName="gradientTransform"
               type="translate"
               from="0 0"
-              to="16 16"
+              to="16 0"
               dur="1.2s"
               repeatCount="indefinite"
             />
