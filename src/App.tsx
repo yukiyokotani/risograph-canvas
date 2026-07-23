@@ -426,6 +426,7 @@ function App() {
   const [invert, setInvert] = useState(false);
   const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("fm");
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
+  const [gamutCutoff, setGamutCutoff] = useState(0.5);
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("cmyk");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -514,6 +515,7 @@ function App() {
         paperColor,
         halftoneMode,
         colorMode,
+        gamutThreshold: gamutCutoff,
         noise,
         transparentBg,
         invert,
@@ -586,6 +588,7 @@ function App() {
     setDensity(pick([1, 1.2, 1.4, 1.6, 1.8, 2]));
     setHalftoneMode(pick<HalftoneMode>(["fm", "am"]));
     setColorMode(pick<ColorMode>(["natural", "bold"]));
+    setGamutCutoff(pick([0.3, 0.5, 0.7]));
   };
 
   const removeColor = (index: number) => {
@@ -899,6 +902,24 @@ function App() {
                 </span>
               </div>
             </div>
+            {colorMode === "bold" && (
+              <div className="mt-4">
+                <Label className="mb-2 text-xs text-muted-foreground">
+                  Off-gamut cutoff
+                </Label>
+                <Slider
+                  value={[gamutCutoff]}
+                  onValueChange={([v]) => setGamutCutoff(v)}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  className="mt-2"
+                />
+                <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+                  {Math.round(gamutCutoff * 100)}%
+                </span>
+              </div>
+            )}
           </section>
 
           {/* Print */}
@@ -979,6 +1000,7 @@ function App() {
                     paperColor={paperColor}
                     halftoneMode={halftoneMode}
                     colorMode={colorMode}
+                    gamutThreshold={gamutCutoff}
                     noise={noise}
                     transparentBg={transparentBg}
                     invert={invert}

@@ -46,6 +46,11 @@ export interface StencilOptions {
   halftoneMode?: HalftoneMode;
   /** 色分解モード。"natural" = 忠実な再現、"bold" = 大胆な色分離 */
   colorMode?: ColorMode;
+  /**
+   * Bold モードで、使用インクで表現できない色（ガモット外）を非印刷にする強さ (0–1)。
+   * 0 = ほぼ切り捨てない、1 = 積極的に非印刷にする。デフォルト: 0.5
+   */
+  gamutThreshold?: number;
   /** 印刷の掠れノイズ (0–0.5)。各色レイヤーにランダムな欠けを生成。デフォルト: 0 */
   noise?: number;
   /** 背景を透明にする。インク部分のみ残る */
@@ -122,8 +127,9 @@ const DEFAULT_SEED = 0x5f3759df;
 function decomposeColors(
   imageData: ImageDataLike,
   inkRgbs: RGB[],
-  paper: RGB
-): Float32Array[] {
+  paper: RGB,
+  needResidual: boolean
+): { maps: Float32Array[]; residuals: Float32Array } {
   const { data, width, height } = imageData;
   const n = inkRgbs.length;
   const pixelCount = width * height;
@@ -150,9 +156,14 @@ function decomposeColors(
 
   // 出力: 各色の濃度マップ
   const maps = inkRgbs.map(() => new Float32Array(pixelCount));
+  // 残差マップ: 使用インクの非負結合で表現しきれなかった量（色のガモット外れ度）
+  const residuals = new Float32Array(pixelCount);
 
   const MAX_ITER = 12;
+  const RESIDUAL_ITER = 8;
   const densities = new Float64Array(n);
+  // 残差用: 濃度上限なし(≥0のみ)の解
+  const densitiesU = new Float64Array(n);
 
   for (let p = 0; p < pixelCount; p++) {
     const off = p * 4;
@@ -203,18 +214,54 @@ function decomposeColors(
     for (let i = 0; i < n; i++) {
       maps[i][p] = densities[i];
     }
+
+    // 残差（ガモット外れ度）: 濃度上限(≤1)による「濃度不足」を誤差に含めないため、
+    // 上限なし(≥0のみ)の非負最小二乗を別途解き、その再構成誤差を測る。
+    // これにより「色相は表現可能で彩度が高いだけの色」は残差が小さくなり、
+    // 「使用インクの非負結合では作れない色相」だけが大きな残差になる。
+    if (needResidual) {
+      for (let i = 0; i < n; i++) {
+        const selfDot = dotInkInk[i * n + i];
+        densitiesU[i] = selfDot > 1e-10 ? Math.max(0, dotInkTarget[i] / selfDot) : 0;
+      }
+      for (let iter = 0; iter < RESIDUAL_ITER; iter++) {
+        for (let i = 0; i < n; i++) {
+          let numerator = dotInkTarget[i];
+          for (let j = 0; j < n; j++) {
+            if (j !== i) numerator -= densitiesU[j] * dotInkInk[i * n + j];
+          }
+          const selfDot = dotInkInk[i * n + i];
+          densitiesU[i] = selfDot > 1e-10 ? Math.max(0, numerator / selfDot) : 0;
+        }
+      }
+      let rr = tr;
+      let rg = tg;
+      let rb = tb;
+      for (let i = 0; i < n; i++) {
+        rr -= densitiesU[i] * inkDeltas[i][0];
+        rg -= densitiesU[i] * inkDeltas[i][1];
+        rb -= densitiesU[i] * inkDeltas[i][2];
+      }
+      residuals[p] = Math.sqrt(rr * rr + rg * rg + rb * rb);
+    }
   }
 
-  return maps;
+  return { maps, residuals };
 }
 
 /**
  * Bold モード: NNLS 密度マップを後処理し、大胆な色分離を実現する。
  *
+ * 0. ガモット外の色（残差大＝使用インクで表現できない色）は非印刷にする
  * 1. 競合抑制: 各ピクセルで支配的なインクを強調し、弱いインクを抑制
  * 2. シグモイドコントラスト: 密度値を 0/1 の両極端に押しやる
  */
-function applyBoldTransform(maps: Float32Array[], pixelCount: number): void {
+function applyBoldTransform(
+  maps: Float32Array[],
+  pixelCount: number,
+  residuals?: Float32Array,
+  gamutThreshold = 0.5
+): void {
   const n = maps.length;
   if (n === 0) return;
 
@@ -222,12 +269,33 @@ function applyBoldTransform(maps: Float32Array[], pixelCount: number): void {
   const SIGMOID_GAIN = 6.0;
   const SIGMOID_MID = 0.35;
 
+  // 残差（ガモット外れ度）による非印刷のしきい値。
+  // gamutThreshold: 0 = ほぼ切り捨てない, 1 = 積極的に非印刷にする。
+  // cutLow 以下の残差は通常印刷、cutHigh 以上は完全に非印刷、
+  // その間は滑らかにフェードさせる。
+  const cutHigh = 0.75 - 0.6 * gamutThreshold;
+  const cutLow = cutHigh * 0.5;
+
   // シグモイド正規化: sigmoid(0)=0, sigmoid(1)=1 となるよう再スケール
   const s0 = 1 / (1 + Math.exp(SIGMOID_GAIN * SIGMOID_MID));
   const s1 = 1 / (1 + Math.exp(-SIGMOID_GAIN * (1 - SIGMOID_MID)));
   const sRange = s1 - s0;
 
   for (let p = 0; p < pixelCount; p++) {
+    // Phase 0: 使用インクで表現できない色（残差大）は大胆に非印刷にする
+    let printFactor = 1;
+    if (residuals) {
+      const r = residuals[p];
+      if (r >= cutHigh) {
+        for (let i = 0; i < n; i++) maps[i][p] = 0;
+        continue;
+      }
+      if (r > cutLow) {
+        const t = (r - cutLow) / (cutHigh - cutLow);
+        printFactor = 1 - t * t * (3 - 2 * t); // smoothstep で滑らかにフェード
+      }
+    }
+
     let maxD = 0;
     for (let i = 0; i < n; i++) {
       if (maps[i][p] > maxD) maxD = maps[i][p];
@@ -245,7 +313,7 @@ function applyBoldTransform(maps: Float32Array[], pixelCount: number): void {
       const x = maps[i][p];
       if (x < 0.001) { maps[i][p] = 0; continue; }
       const sig = 1 / (1 + Math.exp(-SIGMOID_GAIN * (x - SIGMOID_MID)));
-      maps[i][p] = Math.max(0, Math.min(1, (sig - s0) / sRange));
+      maps[i][p] = Math.max(0, Math.min(1, (sig - s0) / sRange)) * printFactor;
     }
   }
 }
@@ -259,7 +327,7 @@ export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;
@@ -305,12 +373,14 @@ export function computeStencil(
     }
   }
 
-  const decompMaps = decompInks.length > 0
-    ? decomposeColors(source, decompInks, WHITE)
-    : [];
+  const pixelCount = width * height;
+  const decomp = decompInks.length > 0
+    ? decomposeColors(source, decompInks, WHITE, colorMode === "bold")
+    : { maps: [] as Float32Array[], residuals: new Float32Array(pixelCount) };
+  const decompMaps = decomp.maps;
+  const residuals = decomp.residuals;
 
   // 密度マップを組み立て
-  const pixelCount = width * height;
   const densityMaps: Float32Array[] = inkRgbs.map(() => new Float32Array(pixelCount));
   // 色分解結果をマッピング
   for (let di = 0; di < decompMaps.length; di++) {
@@ -331,8 +401,9 @@ export function computeStencil(
   }
 
   // Bold モード: 密度マップを後処理して大胆な色分離に
+  // （使用インクで表現できない色は残差をもとに非印刷にする）
   if (colorMode === "bold") {
-    applyBoldTransform(densityMaps, width * height);
+    applyBoldTransform(densityMaps, pixelCount, residuals, gamutThreshold);
   }
 
   // Phase 1: インク同士を乗算（減法混色）で合成するバッファ（白ベース）
