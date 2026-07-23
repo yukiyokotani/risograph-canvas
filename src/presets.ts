@@ -20,7 +20,7 @@ export const INKS = {
   red: { name: "Red", color: "#FF665E" },
   orange: { name: "Orange", color: "#FF6C2F" },
   yellow: { name: "Yellow", color: "#FFE800" },
-  fluorescentPink: { name: "Fluorescent Pink", color: "#FF48B0" },
+  fluorescentPink: { name: "Fluorescent Pink", color: "#EE2B88" },
   fluorescentOrange: { name: "Fluorescent Orange", color: "#FF7477" },
   cornflower: { name: "Cornflower", color: "#62A8E5" },
   skyBlue: { name: "Sky Blue", color: "#4982CF" },
@@ -73,8 +73,8 @@ export const INKS = {
   lightTeal: { name: "Light Teal", color: "#009DA5" },
   warmRed: { name: "Warm Red", color: "#FF4C65" },
   fluorescentGreen: { name: "Fl. Green", color: "#44D62C" },
-  fluorescentBlue: { name: "Fl. Blue", color: "#4FDBF0" },
-  fluorescentYellow: { name: "Fl. Yellow", color: "#FFE916" },
+  fluorescentBlue: { name: "Fl. Blue", color: "#348BC9" },
+  fluorescentYellow: { name: "Fl. Yellow", color: "#D2DD4E" },
 } as const satisfies Record<string, StencilColor>;
 
 /** 代表的な色の組み合わせプリセット */
