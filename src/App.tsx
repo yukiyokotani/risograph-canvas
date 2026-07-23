@@ -478,7 +478,7 @@ function App() {
   const [paperTexture, setPaperTexture] = useState<PaperTexture>("none");
   const [paperTextureAmount, setPaperTextureAmount] = useState(0.5);
   const [downloadScale, setDownloadScale] = useState("1");
-  const [presetKey, setPresetKey] = useState("cmyk");
+  const [presetKey, setPresetKey] = useState("tricolor");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<StencilCanvasHandle>(null);
   const previewRef = useRef<HTMLDivElement>(null);
