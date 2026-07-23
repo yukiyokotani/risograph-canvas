@@ -174,7 +174,11 @@ const guide = {
       },
       {
         heading: "Separation",
-        body: "How the image is split into ink layers.\n• Natural — reproduces the original colors, letting inks overlap smoothly. Best for photographic gradients.\n• Bold — punchier, high-contrast separation for a graphic look. In Bold, Off-gamut cutoff drops colors the chosen inks can't reproduce.",
+        body: "How the image is split into ink layers.\n• Natural — reproduces the original colors, letting inks overlap smoothly. Best for photographic gradients.\n• Bold — punchier, high-contrast separation for a graphic look (see Off-gamut cutoff).",
+      },
+      {
+        heading: "Off-gamut cutoff",
+        body: "Only active with Bold separation. Colors the selected inks can't reproduce (out of gamut) are left unprinted, so they don't come out as muddy dots. Higher values cut more aggressively; lower values keep more of the borderline colors. No effect in Natural.",
       },
       {
         heading: "Halftone Mode",
@@ -201,8 +205,12 @@ const guide = {
         body: "Adds ink scuffing and uneven coverage typical of real stencil prints. Higher values create broader, more visible unevenness.",
       },
       {
-        heading: "History & Shuffle",
-        body: "The clock icon reopens your recently used settings — click one to apply it again. The shuffle icon randomizes the settings for quick exploration.",
+        heading: "Toolbar",
+        body: "At the top of the panel:\n• History (clock) — reopen recently used settings and apply one again.\n• Shuffle — randomize the settings for quick exploration.\n• Guide (i) — this help.\n• Theme — toggle light / dark.",
+      },
+      {
+        heading: "Undo / Redo & preview",
+        body: "Undo a settings change with Ctrl/⌘ + Z, and redo with Ctrl/⌘ + Y or Ctrl/⌘ + Shift + Z. Changing the image clears the history. On the preview: scroll to zoom toward the cursor, drag to pan. On mobile, drag the handle at the top of the panel to resize it.",
       },
       {
         heading: "Download",
@@ -231,7 +239,11 @@ const guide = {
       },
       {
         heading: "色分解 (Separation)",
-        body: "画像をインクの色版にどう分解するかを制御します。\n• Natural — 元の色を忠実に再現し、インク同士を滑らかに重ねます。写真的なグラデーション向き。\n• Bold — コントラストの高いグラフィカルな色分離。Bold では Off-gamut cutoff が、使用インクで再現できない色を非印刷にします。",
+        body: "画像をインクの色版にどう分解するかを制御します。\n• Natural — 元の色を忠実に再現し、インク同士を滑らかに重ねます。写真的なグラデーション向き。\n• Bold — コントラストの高いグラフィカルな色分離（下の Off-gamut cutoff 参照）。",
+      },
+      {
+        heading: "ガモット外カット (Off-gamut cutoff)",
+        body: "Bold の色分解でのみ有効です。使用インクで再現できない色（ガモット外）を非印刷にして、濁った網点として出ないようにします。値を大きくするほど積極的にカットし、小さいほど境界付近の色を残します。Natural では効果はありません。",
       },
       {
         heading: "ハーフトーンモード",
@@ -258,8 +270,12 @@ const guide = {
         body: "実際のステンシル印刷に見られるインクの掠れや色ムラを加えます。値を大きくするほど広範囲にムラが現れます。",
       },
       {
-        heading: "履歴・シャッフル (History & Shuffle)",
-        body: "時計アイコンから最近使った設定を開き、クリックで再適用できます。シャッフルアイコンは設定をランダム化して、手早く探索できます。",
+        heading: "ツールバー (Toolbar)",
+        body: "パネル上部のアイコン:\n• 履歴（時計）— 最近使った設定を開いて再適用。\n• シャッフル — 設定をランダム化して手早く探索。\n• ガイド（i）— このヘルプ。\n• テーマ — ライト/ダーク切替。",
+      },
+      {
+        heading: "元に戻す/やり直し・プレビュー操作",
+        body: "設定変更は Ctrl/⌘ + Z で元に戻し、Ctrl/⌘ + Y または Ctrl/⌘ + Shift + Z でやり直せます。画像を変更すると履歴はリセットされます。プレビューはホイールでカーソル中心にズーム、ドラッグでパン。モバイルではパネル上端のハンドルをドラッグして高さを変えられます。",
       },
       {
         heading: "ダウンロード (Download)",
