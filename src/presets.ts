@@ -3,6 +3,7 @@ import type { StencilColor } from "./lib/stencil";
 /** ステンシル印刷で実際に使われる代表的なインクカラー */
 export const INKS = {
   white: { name: "White", color: "#FFFFFF" },
+  lightGray: { name: "Light Gray", color: "#E0E0E0" },
   black: { name: "Black", color: "#000000" },
   burgundy: { name: "Burgundy", color: "#914E72" },
   blue: { name: "Blue", color: "#0078BF" },
@@ -20,7 +21,7 @@ export const INKS = {
   red: { name: "Red", color: "#FF665E" },
   orange: { name: "Orange", color: "#FF6C2F" },
   yellow: { name: "Yellow", color: "#FFE800" },
-  fluorescentPink: { name: "Fluorescent Pink", color: "#FF48B0" },
+  fluorescentPink: { name: "Fluorescent Pink", color: "#F13792" },
   fluorescentOrange: { name: "Fluorescent Orange", color: "#FF7477" },
   cornflower: { name: "Cornflower", color: "#62A8E5" },
   skyBlue: { name: "Sky Blue", color: "#4982CF" },
@@ -73,8 +74,8 @@ export const INKS = {
   lightTeal: { name: "Light Teal", color: "#009DA5" },
   warmRed: { name: "Warm Red", color: "#FF4C65" },
   fluorescentGreen: { name: "Fl. Green", color: "#44D62C" },
-  fluorescentBlue: { name: "Fl. Blue", color: "#4FDBF0" },
-  fluorescentYellow: { name: "Fl. Yellow", color: "#FFE916" },
+  fluorescentBlue: { name: "Fl. Blue", color: "#3D95D4" },
+  fluorescentYellow: { name: "Fl. Yellow", color: "#E6EF52" },
 } as const satisfies Record<string, StencilColor>;
 
 /** 代表的な色の組み合わせプリセット */
@@ -119,6 +120,19 @@ export const PRESETS = {
       INKS.fluorescentPink,
       INKS.fluorescentYellow,
     ],
+  },
+  fluorescentGray: {
+    name: "Fl. + Gray (Gray + Blue + Pink + Yellow)",
+    colors: [
+      INKS.lightGray,
+      INKS.fluorescentBlue,
+      INKS.fluorescentPink,
+      INKS.fluorescentYellow,
+    ],
+  },
+  grayPink: {
+    name: "Gray + Fl. Pink",
+    colors: [INKS.lightGray, INKS.fluorescentPink],
   },
 } as const satisfies Record<
   string,

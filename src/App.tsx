@@ -427,6 +427,7 @@ function App() {
   const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("fm");
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
   const [gamutCutoff, setGamutCutoff] = useState(0.5);
+  const [highlightCutoff, setHighlightCutoff] = useState(0.06);
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("cmyk");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -516,6 +517,7 @@ function App() {
         halftoneMode,
         colorMode,
         gamutThreshold: gamutCutoff,
+        highlightCutoff,
         noise,
         transparentBg,
         invert,
@@ -617,19 +619,22 @@ function App() {
             gradientUnits="userSpaceOnUse"
             x1="0"
             y1="0"
-            x2="16"
+            x2="24"
             y2="0"
             spreadMethod="repeat"
           >
-            <stop offset="0%" stopColor="#2563eb" />
-            <stop offset="50%" stopColor="#7e22ce" />
-            <stop offset="100%" stopColor="#2563eb" />
+            {/* 青→紫→モーヴ(淡ピンク)。0% と 100% を同色にして継ぎ目なくループ（シアンなし、鮮やかめ） */}
+            <stop offset="0%" stopColor="#3568d8" />
+            <stop offset="25%" stopColor="#7d5fe8" />
+            <stop offset="50%" stopColor="#c85fda" />
+            <stop offset="75%" stopColor="#7d5fe8" />
+            <stop offset="100%" stopColor="#3568d8" />
             <animateTransform
               attributeName="gradientTransform"
               type="translate"
               from="0 0"
-              to="16 0"
-              dur="1.2s"
+              to="24 0"
+              dur="2.6s"
               repeatCount="indefinite"
             />
           </linearGradient>
@@ -956,6 +961,22 @@ function App() {
                   {noise.toFixed(2)}
                 </span>
               </div>
+              <div>
+                <Label className="mb-2 text-xs text-muted-foreground">
+                  Highlight cutoff
+                </Label>
+                <Slider
+                  value={[highlightCutoff]}
+                  onValueChange={([v]) => setHighlightCutoff(v)}
+                  min={0}
+                  max={0.3}
+                  step={0.01}
+                  className="mt-2"
+                />
+                <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
+                  {Math.round(highlightCutoff * 100)}%
+                </span>
+              </div>
             </div>
           </section>
         </div>
@@ -1001,6 +1022,7 @@ function App() {
                     halftoneMode={halftoneMode}
                     colorMode={colorMode}
                     gamutThreshold={gamutCutoff}
+                    highlightCutoff={highlightCutoff}
                     noise={noise}
                     transparentBg={transparentBg}
                     invert={invert}

@@ -34,6 +34,7 @@ export interface StencilCanvasProps {
   halftoneMode?: HalftoneMode;
   colorMode?: ColorMode;
   gamutThreshold?: number;
+  highlightCutoff?: number;
   noise?: number;
   transparentBg?: boolean;
   invert?: boolean;
@@ -62,6 +63,7 @@ export const StencilCanvas = forwardRef<
     halftoneMode,
     colorMode,
     gamutThreshold = 0.5,
+    highlightCutoff = 0.06,
     noise = 0,
     transparentBg = false,
     invert = false,
@@ -120,7 +122,7 @@ export const StencilCanvas = forwardRef<
 
   // 処理パラメータのキーを生成し、完了キーと比較して processing を派生
   const paramsKey = [
-    dotSize, density, inkOpacity, halftoneMode, colorMode, gamutThreshold, noise, misregistration,
+    dotSize, density, inkOpacity, halftoneMode, colorMode, gamutThreshold, highlightCutoff, noise, misregistration,
     transparentBg, invert, paperColor, grain,
     colors.map((c) => c.color).join(","),
   ].join("|");
@@ -130,11 +132,11 @@ export const StencilCanvas = forwardRef<
 
   // 最新パラメータを ref で保持
   const paramsRef = useRef({
-    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, noise, transparentBg, invert,
+    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, highlightCutoff, noise, transparentBg, invert,
   });
   useEffect(() => {
     paramsRef.current = {
-      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, noise, transparentBg, invert,
+      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, highlightCutoff, noise, transparentBg, invert,
     };
   });
 
@@ -158,6 +160,7 @@ export const StencilCanvas = forwardRef<
           halftoneMode: p.halftoneMode,
           colorMode: p.colorMode,
           gamutThreshold: p.gamutThreshold,
+          highlightCutoff: p.highlightCutoff,
           noise: p.noise,
           transparentBg: p.transparentBg,
           invert: p.invert,
