@@ -17,6 +17,7 @@ import {
   Download,
   History,
   Info,
+  Loader2,
   Maximize,
   Moon,
   RotateCcw,
@@ -26,6 +27,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { usePanZoom } from "./hooks/usePanZoom";
+import { useSettingsHistory } from "./hooks/useSettingsHistory";
 import {
   useRecentSettings,
   type StencilSettings,
@@ -666,7 +668,7 @@ function App() {
   const { recent, remove: removeRecent } = useRecentSettings(currentSettings);
   const [recentOpen, setRecentOpen] = useState(false);
 
-  const applySettings = (s: StencilSettings) => {
+  const applySettings = useCallback((s: StencilSettings) => {
     setColors([...s.colors]);
     setDotSize(s.dotSize);
     setMisregistration(s.misregistration);
@@ -683,7 +685,29 @@ function App() {
     setTransparentBg(s.transparentBg);
     setInvert(s.invert);
     setPresetKey("");
-  };
+  }, []);
+
+  // 設定の Undo/Redo（画像変更で履歴リセット）。ブラウザ標準の
+  // Ctrl/⌘+Z=戻す, Ctrl/⌘+Y または Ctrl/⌘+Shift+Z=進む。
+  const { undo, redo } = useSettingsHistory(currentSettings, applySettings, imageSrc);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (key === "y" || (key === "z" && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
 
   const removeColor = (index: number) => {
     setColors((prev) => prev.filter((_, i) => i !== index));
@@ -1329,7 +1353,11 @@ function App() {
               onClick={handleDownload}
               disabled={downloading}
             >
-              <Download className="h-3.5 w-3.5" />
+              {downloading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
               {downloading ? "Processing..." : "Download PNG"}
             </Button>
           </div>
