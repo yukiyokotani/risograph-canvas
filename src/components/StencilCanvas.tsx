@@ -33,6 +33,7 @@ export interface StencilCanvasProps {
   paperColor?: string;
   halftoneMode?: HalftoneMode;
   colorMode?: ColorMode;
+  gamutThreshold?: number;
   noise?: number;
   transparentBg?: boolean;
   invert?: boolean;
@@ -60,6 +61,7 @@ export const StencilCanvas = forwardRef<
     paperColor,
     halftoneMode,
     colorMode,
+    gamutThreshold = 0.5,
     noise = 0,
     transparentBg = false,
     invert = false,
@@ -118,7 +120,7 @@ export const StencilCanvas = forwardRef<
 
   // 処理パラメータのキーを生成し、完了キーと比較して processing を派生
   const paramsKey = [
-    dotSize, density, inkOpacity, halftoneMode, colorMode, noise, misregistration,
+    dotSize, density, inkOpacity, halftoneMode, colorMode, gamutThreshold, noise, misregistration,
     transparentBg, invert, paperColor, grain,
     colors.map((c) => c.color).join(","),
   ].join("|");
@@ -128,11 +130,11 @@ export const StencilCanvas = forwardRef<
 
   // 最新パラメータを ref で保持
   const paramsRef = useRef({
-    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, noise, transparentBg, invert,
+    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, noise, transparentBg, invert,
   });
   useEffect(() => {
     paramsRef.current = {
-      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, noise, transparentBg, invert,
+      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, colorMode, gamutThreshold, noise, transparentBg, invert,
     };
   });
 
@@ -155,6 +157,7 @@ export const StencilCanvas = forwardRef<
           paperColor: p.paperColor,
           halftoneMode: p.halftoneMode,
           colorMode: p.colorMode,
+          gamutThreshold: p.gamutThreshold,
           noise: p.noise,
           transparentBg: p.transparentBg,
           invert: p.invert,
@@ -197,6 +200,8 @@ export const StencilCanvas = forwardRef<
             background: "rgba(0,0,0,0.5)",
             color: "#fff",
             fontSize: "11px",
+            lineHeight: 1.4,
+            whiteSpace: "nowrap",
             padding: "3px 8px",
             borderRadius: "4px",
             pointerEvents: "none",
@@ -211,6 +216,7 @@ export const StencilCanvas = forwardRef<
             padding: "20px",
             color: "#c00",
             fontSize: "14px",
+            lineHeight: 1.5,
             textAlign: "center",
           }}
         >

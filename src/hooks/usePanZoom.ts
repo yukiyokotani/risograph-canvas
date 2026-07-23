@@ -25,8 +25,9 @@ const distance = (a: Point, b: Point) =>
  * プレビュー領域のズーム/パン操作を扱うフック。
  *
  * - マウスホイール: カーソル位置を中心に拡大縮小
+ * - トラックパッドのピンチ(ctrl+wheel): 拡大縮小 / 2本指スワイプ: 平行移動
  * - ドラッグ（1本指/マウス）: 拡大時に平行移動
- * - ピンチ（2本指）: 指の中点を中心に拡大縮小＋移動
+ * - タッチのピンチ（2本指）: 指の中点を中心に拡大縮小＋移動
  * - ボタン用に zoomIn / zoomOut / reset を提供
  *
  * transform は `transformOrigin: center center` の要素に適用する前提。
@@ -85,12 +86,41 @@ export function usePanZoom(containerRef: RefObject<HTMLElement | null>) {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const factor = Math.exp(-e.deltaY * 0.0015);
-      zoomAtPoint(zoomRef.current * factor, e.clientX, e.clientY);
+      // トラックパッドのピンチはブラウザが ctrlKey 付き wheel として送る。
+      // ctrl/⌘ + ホイールも含めて拡大縮小に割り当てる。
+      if (e.ctrlKey) {
+        zoomAtPoint(
+          zoomRef.current * Math.exp(-e.deltaY * 0.01),
+          e.clientX,
+          e.clientY
+        );
+        return;
+      }
+      // 非 ctrl のホイール: マウスホイール(拡大縮小)か
+      // トラックパッドの2本指スワイプ(移動)かを推定する。
+      // トラックパッドは pixel モードで、横成分があるか縦の刻みが細かい。
+      const isTrackpadSwipe =
+        e.deltaMode === 0 && (e.deltaX !== 0 || Math.abs(e.deltaY) < 50);
+      if (isTrackpadSwipe) {
+        // 2本指スワイプ = 平行移動（拡大しているときのみ）
+        if (zoomRef.current > 1) {
+          apply(zoomRef.current, {
+            x: panRef.current.x - e.deltaX,
+            y: panRef.current.y - e.deltaY,
+          });
+        }
+      } else {
+        // マウスホイール = 拡大縮小
+        zoomAtPoint(
+          zoomRef.current * Math.exp(-e.deltaY * 0.0015),
+          e.clientX,
+          e.clientY
+        );
+      }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [containerRef, zoomAtPoint]);
+  }, [containerRef, zoomAtPoint, apply]);
 
   const onPointerDown = useCallback((e: ReactPointerEvent) => {
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
