@@ -11,7 +11,7 @@ import { applyHalftone, type HalftoneMode } from "./halftone";
 export type { HalftoneMode };
 export type ColorMode = "natural" | "bold";
 /** 紙テクスチャの種類 */
-export type PaperTexture = "none" | "fine" | "rough";
+export type PaperTexture = "none" | "felt" | "fiber";
 
 /** ImageData 互換の軽量インターフェース（Web Worker でも使える） */
 export interface ImageDataLike {
@@ -133,13 +133,18 @@ function smoothNoiseAniso(
 }
 
 /**
- * 繊維フェルト: 複数方向に伸びた異方性ノイズを重ね、繊維が絡み合う質感を作る。
- * 単一方向の筋（漉き目/走査線）に見えないよう 4 方向で交差させる。
+ * 繊維場: 指定した各方向に細長く伸びた異方性ノイズ（along:繊維長, across:繊維幅）を
+ * 重ね、繊維が絡み合う地合いを作る。角度の与え方で「多方向マット（felt）」から
+ * 「一方向に流れる漉き紙（fiber）」まで表現を切り替えられる。
  */
-function feltFiber(x: number, y: number, rs: number, seed: number): number {
-  const along = 13 * rs;
-  const across = 1.8 * rs;
-  const angles = [0, 90, 43, -37];
+function fiberField(
+  x: number,
+  y: number,
+  seed: number,
+  angles: number[],
+  along: number,
+  across: number
+): number {
   let f = 0;
   for (let i = 0; i < angles.length; i++) {
     const r = (angles[i] * Math.PI) / 180;
@@ -155,9 +160,9 @@ function feltFiber(x: number, y: number, rs: number, seed: number): number {
 /**
  * 紙テクスチャの明度(l)と暖色ムラ(w)を返す（おおよそ -1〜1）。
  *
- * 「もや」に見えないよう、繊維フェルト（{@link feltFiber}）と細かい tooth を
- * 主役にし、雲状ムラは脇役に留める。すべての特徴サイズを renderScale 倍にして
- * プレビューと出力（高解像度）で見た目を一致させる。
+ * felt … 多方向に絡み合うマットな繊維、fiber … 一方向に流れる長い繊維。
+ * どちらも細かい tooth を重ね、雲状ムラは脇役に留めて「もや」に見せない。
+ * すべての特徴サイズを renderScale 倍にして、プレビューと高解像度出力で見た目を揃える。
  */
 function paperTextureAt(
   x: number,
@@ -167,17 +172,26 @@ function paperTextureAt(
   seed: number
 ): { l: number; w: number } {
   if (type === "none") return { l: 0, w: 0 };
-  const rough = type === "rough";
   const fine = Math.max(1.5 * rs, 1);
-
-  const fiber = feltFiber(x, y, rs, seed);
   const tooth = smoothNoise(x, y, fine, seed + 131) - 0.5;
   const cloud = smoothNoise(x, y, 50 * rs, seed + 1) - 0.5;
 
-  let l =
-    fiber * (rough ? 1.3 : 1.1) +
-    tooth * (rough ? 0.9 : 0.6) +
-    cloud * 0.3;
+  let fiber: number;
+  let fiberW: number;
+  let toothW: number;
+  if (type === "fiber") {
+    // ほぼ一方向（水平寄り）に長く伸びた繊維で、方向性のある地合いを出す
+    fiber = fiberField(x, y, seed, [3, -3, 14], 24 * rs, 1.3 * rs);
+    fiberW = 1.5;
+    toothW = 0.5;
+  } else {
+    // felt: 4 方向で交差させたマットな繊維
+    fiber = fiberField(x, y, seed, [0, 90, 43, -37], 13 * rs, 1.8 * rs);
+    fiberW = 1.1;
+    toothW = 0.7;
+  }
+
+  let l = fiber * fiberW + tooth * toothW + cloud * 0.3;
   // 軽いコントラストで平坦なグレーを避ける
   l = Math.sign(l) * Math.pow(Math.abs(l), 0.9);
   const w = cloud * 0.5;
@@ -414,7 +428,7 @@ export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "fine", paperTextureAmount = 0.5 } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;

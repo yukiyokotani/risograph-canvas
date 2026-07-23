@@ -433,7 +433,7 @@ function App() {
   const [colorMode, setColorMode] = useState<ColorMode>("natural");
   const [gamutCutoff, setGamutCutoff] = useState(0.5);
   const [highlightCutoff, setHighlightCutoff] = useState(0);
-  const [paperTexture, setPaperTexture] = useState<PaperTexture>("fine");
+  const [paperTexture, setPaperTexture] = useState<PaperTexture>("felt");
   const [paperTextureAmount, setPaperTextureAmount] = useState(0.5);
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("cmyk");
@@ -600,7 +600,7 @@ function App() {
     setHalftoneMode(pick<HalftoneMode>(["fm", "am"]));
     setColorMode(pick<ColorMode>(["natural", "bold"]));
     setGamutCutoff(pick([0.3, 0.5, 0.7]));
-    setPaperTexture(pick<PaperTexture>(["fine", "rough", "none"]));
+    setPaperTexture(pick<PaperTexture>(["felt", "fiber", "none"]));
     setPaperTextureAmount(pick([0.3, 0.5, 0.7]));
   };
 
@@ -878,8 +878,8 @@ function App() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none" className="text-xs">None</SelectItem>
-                    <SelectItem value="fine" className="text-xs">Fine</SelectItem>
-                    <SelectItem value="rough" className="text-xs">Rough</SelectItem>
+                    <SelectItem value="felt" className="text-xs">Felt</SelectItem>
+                    <SelectItem value="fiber" className="text-xs">Fiber</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
