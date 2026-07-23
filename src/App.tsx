@@ -466,6 +466,26 @@ function App() {
   const previewRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const panzoom = usePanZoom(previewRef, contentRef);
+
+  // モバイル: コントロールパネルの高さ(vh)。上端のハンドルをドラッグで伸縮できる。
+  const PANEL_MIN_VH = 22;
+  const PANEL_MAX_VH = 88;
+  const [panelVh, setPanelVh] = useState(42);
+  const panelDragRef = useRef<{ y: number; vh: number } | null>(null);
+  const onPanelHandleDown = (e: React.PointerEvent) => {
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    panelDragRef.current = { y: e.clientY, vh: panelVh };
+  };
+  const onPanelHandleMove = (e: React.PointerEvent) => {
+    const d = panelDragRef.current;
+    if (!d) return;
+    const dvh = -((e.clientY - d.y) / window.innerHeight) * 100;
+    setPanelVh(Math.max(PANEL_MIN_VH, Math.min(PANEL_MAX_VH, d.vh + dvh)));
+  };
+  const onPanelHandleUp = (e: React.PointerEvent) => {
+    (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
+    panelDragRef.current = null;
+  };
   const { dark, toggle: toggleTheme } = useTheme();
   const [guideLang, setGuideLang] = useState<GuideLang>("en");
 
@@ -716,7 +736,7 @@ function App() {
           padding でデフォルト時の中心/サイズを非パネル領域に合わせる。 */}
       <div
         ref={previewRef}
-        className="absolute inset-0 z-0 grid place-items-center overflow-hidden p-4 pb-[calc(56vh+0.5rem)] lg:pb-4 lg:pl-[356px]"
+        className="absolute inset-0 z-0 grid place-items-center overflow-hidden p-4 lg:pb-4 lg:pl-[356px]"
         style={{
           touchAction: "none",
           cursor:
@@ -725,6 +745,8 @@ function App() {
                 ? "grabbing"
                 : "grab"
               : "default",
+          // モバイルは下パネルの高さぶんだけ下パディングを空け、印刷物を非パネル領域に収める
+          paddingBottom: isLgLayout ? undefined : `calc(${panelVh}vh + 1rem)`,
         }}
         {...panzoom.handlers}
       >
@@ -770,7 +792,20 @@ function App() {
       {/* Overlay: コントロールパネル（PC=左 / スマホ=下）＋隅コントロール */}
       <div className="pointer-events-none absolute inset-0 z-20 flex flex-col-reverse lg:flex-row">
         {/* Control panel: ガラス面（半透明+blur, ライト/ダーク両対応）＋内側スクロール */}
-        <div className={`pointer-events-auto m-2 flex max-h-[56vh] flex-col overflow-hidden rounded-2xl shadow-xl ${GLASS_SURFACE} lg:m-3 lg:h-[calc(100%-1.5rem)] lg:max-h-none lg:w-[340px] lg:shrink-0`}>
+        <div
+          className={`pointer-events-auto m-2 flex flex-col overflow-hidden rounded-2xl shadow-xl ${GLASS_SURFACE} lg:m-3 lg:h-[calc(100%-1.5rem)] lg:w-[340px] lg:shrink-0`}
+          style={isLgLayout ? undefined : { height: `${panelVh}vh` }}
+        >
+          {/* Drag handle: ボトムシートの高さをドラッグで伸縮（モバイルのみ） */}
+          <div
+            className="flex shrink-0 touch-none cursor-ns-resize items-center justify-center pt-2.5 pb-1 lg:hidden"
+            onPointerDown={onPanelHandleDown}
+            onPointerMove={onPanelHandleMove}
+            onPointerUp={onPanelHandleUp}
+            onPointerCancel={onPanelHandleUp}
+          >
+            <div className="h-1.5 w-10 rounded-full bg-muted-foreground/30" />
+          </div>
           <div className="sidebar-scroll flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-4 will-change-scroll [transform:translateZ(0)]">
           {/* Panel header: タイトル＋操作 / サブタイトル */}
           <div className="mb-4">
@@ -1232,8 +1267,8 @@ function App() {
 
         {/* Preview corner controls（非パネル領域）: ズーム左下・ダウンロード右下 */}
         <div className="pointer-events-none relative flex min-h-0 min-w-0 flex-1">
-          {/* Zoom (bottom-left) */}
-          <div className="pointer-events-none absolute bottom-0 left-0 flex p-3">
+          {/* Zoom: モバイルは上, PC は下（下だとダウンロードと被るため） */}
+          <div className="pointer-events-none absolute left-0 top-0 flex p-3 lg:bottom-0 lg:top-auto">
             <div
               className={`pointer-events-auto flex items-center gap-0.5 rounded-lg p-1 shadow-sm ${GLASS_SURFACE}`}
               onPointerDown={(e) => e.stopPropagation()}
