@@ -33,7 +33,13 @@ const distance = (a: Point, b: Point) =>
  * transform は `transformOrigin: center center` の要素に適用する前提。
  * pan はコンテナ中心を原点としたスクリーン座標（px）。
  */
-export function usePanZoom(containerRef: RefObject<HTMLElement | null>) {
+export function usePanZoom(
+  containerRef: RefObject<HTMLElement | null>,
+  /** transform を適用する要素（transformOrigin: center center を前提）。
+   *  ここへ CSS 変数 --pz-transform を命令的に当て、React 再レンダー無しで
+   *  ズーム/パンの見た目を更新する（App 全体の再レンダーによるカクつきを避ける）。 */
+  contentRef?: RefObject<HTMLElement | null>
+) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -46,18 +52,52 @@ export function usePanZoom(containerRef: RefObject<HTMLElement | null>) {
   const prevPinchRef = useRef<{ dist: number; midX: number; midY: number } | null>(
     null
   );
+  // React state 同期を rAF で間引くための予約 ID
+  const rafRef = useRef<number | null>(null);
 
   const apply = useCallback((z: number, p: Point) => {
     zoomRef.current = z;
     panRef.current = p;
-    setZoom(z);
-    setPan(p);
+    // 見た目は CSS 変数へ命令的に適用（コンポジタ更新のみ・再レンダー無し）
+    const el = contentRef?.current;
+    if (el) {
+      el.style.setProperty(
+        "--pz-transform",
+        `translate(${p.x}px, ${p.y}px) scale(${z})`
+      );
+    }
+    // %/ボタン表示用の state 同期は 1 フレームに 1 回へ間引く
+    if (rafRef.current == null) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        setZoom(zoomRef.current);
+        setPan(panRef.current);
+      });
+    }
+  }, [contentRef]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    };
   }, []);
 
+  // transform-origin（center center の対象要素＝padding 内でセンタリングされた
+  // コンテンツ）の中心をスクリーン座標で返す。コンテナに非対称 padding があっても
+  // zoom-to-cursor の焦点が正しくなるよう、border box 中心ではなく content box 中心を使う。
   const center = useCallback(() => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return { x: 0, y: 0 };
-    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const el = containerRef.current;
+    if (!el) return { x: 0, y: 0 };
+    const rect = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const pl = parseFloat(cs.paddingLeft) || 0;
+    const pr = parseFloat(cs.paddingRight) || 0;
+    const pt = parseFloat(cs.paddingTop) || 0;
+    const pb = parseFloat(cs.paddingBottom) || 0;
+    return {
+      x: rect.left + pl + (rect.width - pl - pr) / 2,
+      y: rect.top + pt + (rect.height - pt - pb) / 2,
+    };
   }, [containerRef]);
 
   /** clientX/Y（コンテナ中心からの相対）を焦点に拡大縮小する */

@@ -29,6 +29,8 @@ export interface RecentEntry {
   /** 設定内容から導出した識別子（重複判定に使用） */
   id: string;
   settings: StencilSettings;
+  /** 最後にこの設定が使われた日時（epoch ms） */
+  savedAt: number;
 }
 
 const KEY = "stencil-canvas:recent";
@@ -41,7 +43,11 @@ function load(): RecentEntry[] {
     const raw = localStorage.getItem(KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.slice(0, MAX) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.slice(0, MAX).map((e) => ({
+      ...e,
+      savedAt: typeof e.savedAt === "number" ? e.savedAt : 0,
+    }));
   } catch {
     return [];
   }
@@ -70,7 +76,7 @@ export function useRecentSettings(current: StencilSettings) {
     const id = JSON.stringify(settings);
     setRecent((prev) => {
       const next = [
-        { id, settings },
+        { id, settings, savedAt: Date.now() },
         ...prev.filter((e) => e.id !== id),
       ].slice(0, MAX);
       persist(next);
