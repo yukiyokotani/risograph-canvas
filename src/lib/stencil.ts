@@ -51,6 +51,12 @@ export interface StencilOptions {
    * 0 = ほぼ切り捨てない、1 = 積極的に非印刷にする。デフォルト: 0.5
    */
   gamutThreshold?: number;
+  /**
+   * ハイライトのクリップ (0–1)。この濃度未満のインクを非印刷にする。
+   * ほぼ白（JPEG ノイズや反アリアス等でわずかに色づいた画素）が網点として
+   * 散るのを防ぐ。デフォルト: 0.06
+   */
+  highlightCutoff?: number;
   /** 印刷の掠れノイズ (0–0.5)。各色レイヤーにランダムな欠けを生成。デフォルト: 0 */
   noise?: number;
   /** 背景を透明にする。インク部分のみ残る */
@@ -327,7 +333,7 @@ export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0.06, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;
@@ -404,6 +410,17 @@ export function computeStencil(
   // （使用インクで表現できない色は残差をもとに非印刷にする）
   if (colorMode === "bold") {
     applyBoldTransform(densityMaps, pixelCount, residuals, gamutThreshold);
+  }
+
+  // ハイライトのクリップ: ごく低い濃度（ほぼ白）を 0 にして、
+  // わずかに色づいた画素が網点として散る（端のノイズ）のを防ぐ。
+  if (highlightCutoff > 0) {
+    for (let ci = 0; ci < densityMaps.length; ci++) {
+      const m = densityMaps[ci];
+      for (let p = 0; p < pixelCount; p++) {
+        if (m[p] < highlightCutoff) m[p] = 0;
+      }
+    }
   }
 
   // Phase 1: インク同士を乗算（減法混色）で合成するバッファ（白ベース）
