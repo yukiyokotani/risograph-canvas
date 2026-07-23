@@ -637,6 +637,7 @@ function App() {
 
   const addColor = (color: StencilColor) => {
     setColors((prev) => [...prev, color]);
+    setPresetKey(""); // プリセットから外れたので選択を解除
   };
 
   /**
@@ -727,6 +728,7 @@ function App() {
 
   const removeColor = (index: number) => {
     setColors((prev) => prev.filter((_, i) => i !== index));
+    setPresetKey(""); // プリセットから外れたので選択を解除
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
