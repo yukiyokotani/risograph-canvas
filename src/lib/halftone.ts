@@ -31,6 +31,17 @@ function superSamples(cellSize: number): number {
 }
 
 /**
+ * AM ドットの径写像の定数。
+ * DOT_FILL_D … この濃度で円がセルに内接（r=0.5·cell, 被覆率 π/4）。これ未満は
+ *   「重なり無し」領域として面積＝被覆率になる写像を使う。
+ * DOT_MAX_R … 濃度 1 での最大半径（×cell）。1/√2≈0.707 でセルを完全被覆（ベタ）。
+ *   ベタまで行くと網点構造が消えるため、あえて手前で止めて最暗部でも
+ *   ドットの隙間（地の抜け）が残るようにする。0.54≈被覆率 85%。
+ */
+const DOT_FILL_D = Math.PI / 4; // ≒0.785
+const DOT_MAX_R = 0.54;
+
+/**
  * AM ハーフトーン: ドット中心の濃度でドットサイズを決定し、常に真円を描画する。
  * 各ピクセルを SS×SS のサブサンプルで評価し、真円内に入るサブサンプルの割合を
  * カバレッジとする（アナリティックなアンチエイリアス）。これによりドットサイズに
@@ -97,8 +108,21 @@ function applyAMHalftone(
               d = Math.min(d * scale, 1);
               if (d < 0.001) continue;
 
-              // ドット中心の濃度からドット半径を決定（ピクセル単位）
-              const radius = Math.sqrt(d) * 0.5 * cellSize;
+              // ドット中心の濃度 → ドット半径（ピクセル単位）。
+              // 被覆率が濃度 d に一致するよう写像し、d→1 で隣接ドットが融合して
+              // 最大被覆率（DOT_MAX_R≒85%）まで太らせる。
+              // 従来は 0.5·cell 止まりで最大でも内接円＝被覆率 π/4≒78% が上限となり、
+              // 暗部が頭打ちで「サイズ変調のレンジが狭い」原因になっていた。
+              let radius: number;
+              if (d <= DOT_FILL_D) {
+                // 重なり無し領域: 円の面積 = 被覆率 d（r = √(d/π)·cell）
+                radius = Math.sqrt(d / Math.PI) * cellSize;
+              } else {
+                // d: DOT_FILL_D→1 を 半径 0.5·cell→DOT_MAX_R·cell へ。
+                // 隣接円が重なり合い、被覆率が滑らかに最大値へ向かう。
+                const t = (d - DOT_FILL_D) / (1 - DOT_FILL_D);
+                radius = (0.5 + t * (DOT_MAX_R - 0.5)) * cellSize;
+              }
 
               const ddx = rx - dotRx;
               const ddy = ry - dotRy;
