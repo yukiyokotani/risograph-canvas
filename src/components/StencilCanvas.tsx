@@ -67,7 +67,7 @@ export const StencilCanvas = forwardRef<
     colorMode,
     gamutThreshold = 0.5,
     highlightCutoff = 0,
-    paperTexture = "fiber",
+    paperTexture = "fine",
     paperTextureAmount = 0.5,
     noise = 0,
     transparentBg = false,

@@ -11,7 +11,7 @@ import { applyHalftone, type HalftoneMode } from "./halftone";
 export type { HalftoneMode };
 export type ColorMode = "natural" | "bold";
 /** 紙テクスチャの種類 */
-export type PaperTexture = "none" | "grain" | "fiber" | "recycled";
+export type PaperTexture = "none" | "fine" | "rough";
 
 /** ImageData 互換の軽量インターフェース（Web Worker でも使える） */
 export interface ImageDataLike {
@@ -110,39 +110,79 @@ function smoothNoise(x: number, y: number, cellSize: number, seed: number): numb
          (n01 * (1 - sx) + n11 * sx) * sy;
 }
 
+/** 異方性スムースノイズ（x/y で別セルサイズ）。繊維の向きを作るのに使う。 */
+function smoothNoiseAniso(
+  x: number,
+  y: number,
+  cellX: number,
+  cellY: number,
+  seed: number
+): number {
+  const gx = Math.floor(x / cellX);
+  const gy = Math.floor(y / cellY);
+  const fx = x / cellX - gx;
+  const fy = y / cellY - gy;
+  const n00 = scuffHash(gx, gy, seed);
+  const n10 = scuffHash(gx + 1, gy, seed);
+  const n01 = scuffHash(gx, gy + 1, seed);
+  const n11 = scuffHash(gx + 1, gy + 1, seed);
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  return (n00 * (1 - sx) + n10 * sx) * (1 - sy) +
+         (n01 * (1 - sx) + n11 * sx) * sy;
+}
+
 /**
- * 紙テクスチャの明度モジュレーション（おおよそ -1〜1 の符号付き値）を返す。
- * すべての特徴サイズを renderScale 倍にすることで、プレビューと出力（高解像度）で
- * 見た目が一致し、解像度スケールにも比例する。
+ * 繊維フェルト: 複数方向に伸びた異方性ノイズを重ね、繊維が絡み合う質感を作る。
+ * 単一方向の筋（漉き目/走査線）に見えないよう 4 方向で交差させる。
  */
-function paperTextureDelta(
+function feltFiber(x: number, y: number, rs: number, seed: number): number {
+  const along = 13 * rs;
+  const across = 1.8 * rs;
+  const angles = [0, 90, 43, -37];
+  let f = 0;
+  for (let i = 0; i < angles.length; i++) {
+    const r = (angles[i] * Math.PI) / 180;
+    const c = Math.cos(r);
+    const s = Math.sin(r);
+    const xr = x * c + y * s;
+    const yr = -x * s + y * c;
+    f += smoothNoiseAniso(xr, yr, along, across, seed + i * 23) - 0.5;
+  }
+  return f / angles.length;
+}
+
+/**
+ * 紙テクスチャの明度(l)と暖色ムラ(w)を返す（おおよそ -1〜1）。
+ *
+ * 「もや」に見えないよう、繊維フェルト（{@link feltFiber}）と細かい tooth を
+ * 主役にし、雲状ムラは脇役に留める。すべての特徴サイズを renderScale 倍にして
+ * プレビューと出力（高解像度）で見た目を一致させる。
+ */
+function paperTextureAt(
   x: number,
   y: number,
   type: PaperTexture,
   rs: number,
   seed: number
-): number {
-  if (type === "grain") {
-    // 細かい均一グレイン
-    return (smoothNoise(x, y, Math.max(1.5 * rs, 1), seed + 401) - 0.5) * 2;
-  }
-  if (type === "fiber" || type === "recycled") {
-    // 多重ノイズによる柔らかい繊維ムラ
-    const n =
-      smoothNoise(x, y, 6 * rs, seed + 401) * 0.5 +
-      smoothNoise(x, y, 18 * rs, seed + 421) * 0.35 +
-      smoothNoise(x, y, 60 * rs, seed + 443) * 0.15;
-    let d = (n - 0.5) * 2;
-    if (type === "recycled") {
-      // まばらな斑点（再生紙風）
-      const cell = Math.max(2 * rs, 1);
-      const sh = scuffHash(Math.floor(x / cell), Math.floor(y / cell), seed + 467);
-      if (sh > 0.985) d -= 1.8;
-      else if (sh > 0.975) d += 1.2;
-    }
-    return d;
-  }
-  return 0;
+): { l: number; w: number } {
+  if (type === "none") return { l: 0, w: 0 };
+  const rough = type === "rough";
+  const fine = Math.max(1.5 * rs, 1);
+
+  const fiber = feltFiber(x, y, rs, seed);
+  const tooth = smoothNoise(x, y, fine, seed + 131) - 0.5;
+  const cloud = smoothNoise(x, y, 50 * rs, seed + 1) - 0.5;
+
+  let l =
+    fiber * (rough ? 1.3 : 1.1) +
+    tooth * (rough ? 0.9 : 0.6) +
+    cloud * 0.3;
+  // 軽いコントラストで平坦なグレーを避ける
+  l = Math.sign(l) * Math.pow(Math.abs(l), 0.9);
+  const w = cloud * 0.5;
+
+  return { l, w };
 }
 
 /**
@@ -374,7 +414,7 @@ export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "fiber", paperTextureAmount = 0.5 } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "fine", paperTextureAmount = 0.5 } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;
@@ -628,13 +668,12 @@ export function computeStencil(
         if (texOn) {
           const x = i % width;
           const y = (i / width) | 0;
-          const t =
-            paperTextureDelta(x, y, paperTexture, renderScale, rngSeed) *
-            texAmp *
-            invA;
-          addR += t;
+          const { l, w } = paperTextureAt(x, y, paperTexture, renderScale, rngSeed);
+          const t = l * texAmp * invA;
+          const wt = w * texAmp * 0.4 * invA; // 暖色ムラ: R を上げ B を下げる
+          addR += t + wt;
           addG += t;
-          addB += t * 0.92; // 青みを少し抑えて紙らしい暖色ムラに
+          addB += t - wt;
         }
         out[off] = Math.max(0, Math.min(255, Math.round(out[off] + addR)));
         out[off + 1] = Math.max(0, Math.min(255, Math.round(out[off + 1] + addG)));
