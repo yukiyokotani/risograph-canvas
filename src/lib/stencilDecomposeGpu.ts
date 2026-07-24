@@ -106,21 +106,29 @@ fn gramAt(row: u32, column: u32) -> f32 {
   return precomputed[DELTA_FLOATS + row * MAX_INKS + column];
 }
 
+// 明度表は「インクが紙より明るい」場合（暗い紙に明るいインク）は増加する。
+// CPU の coverageForLightness と同じく両方向へ対応する。
 fn coverageForLightness(inkIndex: u32, targetL: f32) -> f32 {
   let base = inkIndex * TABLE_SIZE;
-  if (targetL >= lightnessTables[base]) {
+  let first = lightnessTables[base];
+  let last = lightnessTables[base + TABLE_SIZE - 1u];
+  let ascending = last > first;
+  if (select(targetL >= first, targetL <= first, ascending)) {
     return 0.0;
   }
-  if (targetL <= lightnessTables[base + TABLE_SIZE - 1u]) {
+  if (select(targetL <= last, targetL >= last, ascending)) {
     return 1.0;
   }
   for (var k = 0u; k < TABLE_SIZE - 1u; k++) {
     let l0 = lightnessTables[base + k];
     let l1 = lightnessTables[base + k + 1u];
-    if (targetL <= l0 && targetL >= l1) {
+    let lo = select(l1, l0, ascending);
+    let hi = select(l0, l1, ascending);
+    if (targetL >= lo && targetL <= hi) {
+      let span = l1 - l0;
       var fraction = 0.0;
-      if (l0 != l1) {
-        fraction = (l0 - targetL) / (l0 - l1);
+      if (span != 0.0) {
+        fraction = (targetL - l0) / span;
       }
       return (f32(k) + fraction) / f32(TABLE_SIZE - 1u);
     }
@@ -264,7 +272,8 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
   }
 
   // 2色 × Natural: 加法 NNLS の代わりに乗算モデルへ直接フィット（snap は無効化済み）。
-  if (params.twoInkFit != 0u && alphaByte >= 1u) {
+  // CPU 側は alpha < 0.01（= alphaByte が 3 未満）を除外するので閾値を揃える
+  if (params.twoInkFit != 0u && alphaByte >= 3u) {
     let sa = deltaAt(0u);
     let sb = deltaAt(1u);
     let o = params.inkOpacity;

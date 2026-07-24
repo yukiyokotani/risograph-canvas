@@ -137,7 +137,8 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
   // 補充の重複排除: 見た目が実質同じ署名と、パレットごとの採用数
   const seenSigRef = useRef<Set<string>>(new Set());
   const paletteCountRef = useRef<Map<string, number>>(new Map());
-  const producingRef = useRef(false);
+  // 補充中の世代（-1 = 実行なし）。世代ごとに二重起動を防ぐ。
+  const producingRef = useRef(-1);
   const candCountRef = useRef(0);
   // 補充の世代。ダイアログを開き直す/画像が変わると進めて、実行中の補充を捨てる。
   const runRef = useRef(0);
@@ -205,12 +206,14 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
    * 基準を満たしたものだけをグリッドへ積む。
    */
   const produce = useCallback(async (want: number) => {
-    if (producingRef.current) return;
     const stats = statsRef.current;
     const screenSrc = screenSrcRef.current;
     if (!stats || !screenSrc) return;
-    producingRef.current = true;
     const myRun = runRef.current;
+    // 同じ世代の二重起動だけを弾く。古い世代がまだ後片付け中でも、新しい世代の
+    // 補充は始められるようにする（ここで返してしまうと開き直したとき空のままになる）。
+    if (producingRef.current === myRun) return;
+    producingRef.current = myRun;
     try {
       let added = 0;
       // 生成→間引き→採点を、必要数が埋まるまで数回まわす（無限ループ防止に上限つき）
@@ -250,7 +253,7 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
         }
       }
     } finally {
-      producingRef.current = false;
+      if (producingRef.current === myRun) producingRef.current = -1;
     }
   }, []);
 
@@ -308,7 +311,10 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
   }, [visibleKey]);
 
   // 末尾が近づいたら補充する（重複排除と足切りは produce の中）。
+  // ダイアログは常にマウントされているので、open を見ないと「閉じた直後に
+  // candidates を空にした」変化で再発火し、見えないまま GPU 描画を走らせてしまう。
   useEffect(() => {
+    if (!open) return;
     if (!statsRef.current || !viewport.w || !tile) return;
     if (candidates.length >= MAX_ITEMS) return;
     const needRow = Math.ceil((scrollTop + viewport.h) / tile) + OVERSCAN_ROWS + 2;
@@ -316,7 +322,7 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
       produce(Math.max(cols * 2, (needRow - rowCount) * cols));
     }
      
-  }, [scrollTop, viewport.w, viewport.h, tile, rowCount, cols, candidates.length, produce]);
+  }, [open, scrollTop, viewport.w, viewport.h, tile, rowCount, cols, candidates.length, produce]);
 
   // 開いたら（画像が変わったら）ソースを読み、初期候補を生成。閉じたら破棄。
   useEffect(() => {
@@ -326,6 +332,11 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
       simRunRef.current++;
       cacheRef.current.clear();
       candCountRef.current = 0;
+      // 実行中の補充を止めるだけでなく、ソースも捨てる（開き直したときに前回の
+      // 画像で描いた候補が一瞬見えるのを防ぐ）。
+      statsRef.current = null;
+      screenSrcRef.current = null;
+      sourceRef.current = null;
       setCandidates([]);
       setSelectedId(null);
       setSimilar([]);

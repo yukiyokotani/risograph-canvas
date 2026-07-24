@@ -113,6 +113,15 @@ export const StencilCanvas = forwardRef<
   const imageData = loaded && loaded.src === src ? loaded.data : null;
   const loading = !imageData && !error;
 
+  // src が変わったら前のエラーを捨てる。残したままだと loading の判定
+  // （!imageData && !error）が false になり、新しい画像の読み込み中に古いエラーが
+  // 出たままインジケータも出ない。effect ではなくレンダー中に調整する。
+  const [prevSrc, setPrevSrc] = useState(src);
+  if (prevSrc !== src) {
+    setPrevSrc(src);
+    setError(null);
+  }
+
   useEffect(() => {
     let cancelled = false;
 
