@@ -5,6 +5,7 @@ import {
 } from "./components/StencilCanvas";
 import { INKS, PRESETS } from "./presets";
 import { hexToRgb, rgbToLab } from "./lib/color";
+import { getGpuDevice, renderStencilPixels } from "./lib/stencilRenderer";
 import {
   loadImage,
   getImageData,
@@ -603,26 +604,31 @@ function App() {
         renderScale: scale,
       };
 
-      const pixels = await new Promise<Uint8ClampedArray>((resolve, reject) => {
-        const worker = new Worker(
-          new URL("./lib/stencil.worker.ts", import.meta.url),
-          { type: "module" },
-        );
-        worker.onmessage = (e: MessageEvent<Uint8ClampedArray>) => {
-          resolve(e.data);
-          worker.terminate();
-        };
-        worker.onerror = (e) => {
-          reject(new Error(e.message));
-          worker.terminate();
-        };
-        worker.postMessage({
-          data: imageData.data,
-          width: imageData.width,
-          height: imageData.height,
-          options,
-        });
-      });
+      // WebGPU が使えるならそちらで書き出す（高解像度ほど効く）。
+      // 使えない環境では従来どおり Worker 上の CPU 実装で処理し、UI を止めない。
+      const gpuDevice = await getGpuDevice();
+      const pixels = gpuDevice
+        ? await renderStencilPixels(imageData, options)
+        : await new Promise<Uint8ClampedArray>((resolve, reject) => {
+            const worker = new Worker(
+              new URL("./lib/stencil.worker.ts", import.meta.url),
+              { type: "module" },
+            );
+            worker.onmessage = (e: MessageEvent<Uint8ClampedArray>) => {
+              resolve(e.data);
+              worker.terminate();
+            };
+            worker.onerror = (e) => {
+              reject(new Error(e.message));
+              worker.terminate();
+            };
+            worker.postMessage({
+              data: imageData.data,
+              width: imageData.width,
+              height: imageData.height,
+              options,
+            });
+          });
 
       const offscreen = document.createElement("canvas");
       offscreen.width = targetWidth;

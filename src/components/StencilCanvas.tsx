@@ -6,7 +6,6 @@ import {
   forwardRef,
 } from "react";
 import {
-  processStencil,
   loadImage,
   getImageData,
   type StencilColor,
@@ -14,6 +13,7 @@ import {
   type ColorMode,
   type PaperTexture,
 } from "../lib/stencil";
+import { renderStencilPixels } from "../lib/stencilRenderer";
 
 export type { StencilColor, HalftoneMode, ColorMode, PaperTexture };
 
@@ -80,6 +80,8 @@ export const StencilCanvas = forwardRef<
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // 非同期描画の追い越し防止（最新の描画だけを採用する）
+  const renderRunRef = useRef(0);
 
   useImperativeHandle(ref, () => ({
     getCanvas: () => canvasRef.current,
@@ -152,30 +154,44 @@ export const StencilCanvas = forwardRef<
     if (!imageData) return;
 
     const timerId = setTimeout(() => {
-      setTimeout(() => {
+      setTimeout(async () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const p = paramsRef.current;
-        processStencil(imageData, canvas, {
-          colors: p.colors,
-          dotSize: p.dotSize,
-          misregistration: p.misregistration,
-          grain: p.grain,
-          density: p.density,
-          inkOpacity: p.inkOpacity,
-          paperColor: p.paperColor,
-          halftoneMode: p.halftoneMode,
-          colorMode: p.colorMode,
-          gamutThreshold: p.gamutThreshold,
-          blackGeneration: p.blackGeneration,
-          highlightCutoff: p.highlightCutoff,
-          paperTexture: p.paperTexture,
-          paperTextureAmount: p.paperTextureAmount,
-          noise: p.noise,
-          transparentBg: p.transparentBg,
-          invert: p.invert,
-        });
-        setProcessedKey(paramsKey);
+        // 連続操作で古い描画が後から届いても上書きしないよう、最新のみ採用する
+        const myRun = ++renderRunRef.current;
+        try {
+          const pixels = await renderStencilPixels(imageData, {
+            colors: p.colors,
+            dotSize: p.dotSize,
+            misregistration: p.misregistration,
+            grain: p.grain,
+            density: p.density,
+            inkOpacity: p.inkOpacity,
+            paperColor: p.paperColor,
+            halftoneMode: p.halftoneMode,
+            colorMode: p.colorMode,
+            gamutThreshold: p.gamutThreshold,
+            blackGeneration: p.blackGeneration,
+            highlightCutoff: p.highlightCutoff,
+            paperTexture: p.paperTexture,
+            paperTextureAmount: p.paperTextureAmount,
+            noise: p.noise,
+            transparentBg: p.transparentBg,
+            invert: p.invert,
+          });
+          if (myRun !== renderRunRef.current) return; // 追い越された
+          const { width, height } = imageData;
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d")!;
+          const outputData = ctx.createImageData(width, height);
+          outputData.data.set(pixels);
+          ctx.putImageData(outputData, 0, 0);
+          setProcessedKey(paramsKey);
+        } catch (e) {
+          console.error("[stencil] 描画に失敗しました", e);
+        }
       }, 0);
     }, DEBOUNCE_MS);
 

@@ -618,6 +618,21 @@ export interface InkDensities {
 }
 
 /**
+ * 色分解〜後処理までを行い、各色版の濃度マップとスクリーン角度だけを返す。
+ * 網点・合成は行わないので、GPU 側で合成する場合に CPU コストを払わずに済む。
+ * （分解は元ピクセルの純関数なので、網点パラメータを変えても再計算不要＝キャッシュ可能）
+ */
+export function computeInkDensities(
+  sourceData: ImageDataLike,
+  options: StencilOptions
+): InkDensities {
+  let captured: InkDensities | null = null;
+  computeStencil(sourceData, options, (d) => { captured = d; }, true);
+  if (!captured) throw new Error("failed to compute ink densities");
+  return captured;
+}
+
+/**
  * DOM 非依存のステンシル印刷処理。
  * ソースのピクセルデータを受け取り、加工済みのピクセル配列を返す。
  * Web Worker からも呼び出し可能。
@@ -628,7 +643,8 @@ export interface InkDensities {
 export function computeStencil(
   sourceData: ImageDataLike,
   options: StencilOptions,
-  onDensities?: (d: InkDensities) => void
+  onDensities?: (d: InkDensities) => void,
+  densitiesOnly = false
 ): Uint8ClampedArray {
   const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, blackGeneration = 0.7, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
   const { width, height } = sourceData;
@@ -758,20 +774,6 @@ export function computeStencil(
     }
   }
 
-  // Phase 1: インク同士を乗算（減法混色）で合成するバッファ（白ベース）
-  // Phase 2 で紙の色に source-over で合成する
-  const out = new Uint8ClampedArray(pixelCount * 4);
-  // 乗算バッファ: 白紙上のインク透過率を蓄積（255 = 完全透過）
-  for (let i = 0; i < pixelCount; i++) {
-    const off = i * 4;
-    out[off] = 255;
-    out[off + 1] = 255;
-    out[off + 2] = 255;
-    out[off + 3] = 255;
-  }
-  // インクカバレッジ蓄積用（アルファ合成で union を取る）
-  const alphaMap = new Float32Array(pixelCount);
-
   // スクリーン角度を色の暗さ順に割り当てる（リソグラフの定石）。
   // 最も暗い色に 45° を与え、以降は暗い順に RISO_SCREEN_ANGLES を割り当てる。
   const autoAngles = new Array<number>(colors.length);
@@ -787,7 +789,9 @@ export function computeStencil(
         RISO_SCREEN_ANGLES[rank % RISO_SCREEN_ANGLES.length];
     });
 
-  // GPU パイプライン等へ濃度マップ＋角度を引き渡す（描画結果には影響しない）
+  // GPU パイプライン等へ濃度マップ＋角度を引き渡す（描画結果には影響しない）。
+  // densitiesOnly のときはここで打ち切り、重い網点・合成を行わない
+  // （GPU 側で合成するため CPU の網点コストを払わないようにする）。
   if (onDensities) {
     onDensities({
       densityMaps,
@@ -797,7 +801,22 @@ export function computeStencil(
       width,
       height,
     });
+    if (densitiesOnly) return new Uint8ClampedArray(0);
   }
+
+  // Phase 1: インク同士を乗算（減法混色）で合成するバッファ（白ベース）
+  // Phase 2 で紙の色に source-over で合成する
+  const out = new Uint8ClampedArray(pixelCount * 4);
+  // 乗算バッファ: 白紙上のインク透過率を蓄積（255 = 完全透過）
+  for (let i = 0; i < pixelCount; i++) {
+    const off = i * 4;
+    out[off] = 255;
+    out[off + 1] = 255;
+    out[off + 2] = 255;
+    out[off + 3] = 255;
+  }
+  // インクカバレッジ蓄積用（アルファ合成で union を取る）
+  const alphaMap = new Float32Array(pixelCount);
 
   // 各色レイヤーを乗算で合成（インク同士の減法混色）
   for (let ci = 0; ci < colors.length; ci++) {

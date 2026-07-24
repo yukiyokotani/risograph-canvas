@@ -1,7 +1,7 @@
 // WebGPU パリティ実験のオーケストレーション。
 // CPU 参照(computeStencil) と WebGPU 版を並べ、ピクセル差分を計測する。
 import { computeStencil, type InkDensities, type StencilOptions } from "../../src/lib/stencil";
-import { renderStencilWebGPU, type GpuStencilInput } from "./gpu";
+import { renderStencilWebGPU, type GpuStencilInput } from "../../src/lib/stencilGpu";
 
 const PRESETS: Record<string, { name: string; color: string }[]> = {
   tricolor: [
