@@ -39,6 +39,15 @@
         </select>
       </label>
       <label>dotSize <select id="dot"><option>3</option><option>4</option><option>6</option><option>2</option></select></label>
+      <label>size
+        <select id="size">
+          <option value="480">480px</option>
+          <option value="600" selected>600px (preview)</option>
+          <option value="1200">1200px (2x)</option>
+          <option value="2400">2400px (4x)</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="skipcpu" /> skip CPU (GPUのみ計測)</label>
       <label>effects
         <select id="fx">
           <option value="off">off (core only)</option>

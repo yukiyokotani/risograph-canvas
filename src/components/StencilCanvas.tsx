@@ -13,7 +13,7 @@ import {
   type ColorMode,
   type PaperTexture,
 } from "../lib/stencil";
-import { renderStencilPixels } from "../lib/stencilRenderer";
+import { renderStencilPixels, getGpuDevice } from "../lib/stencilRenderer";
 
 export type { StencilColor, HalftoneMode, ColorMode, PaperTexture };
 
@@ -46,8 +46,14 @@ export interface StencilCanvasProps {
   style?: React.CSSProperties;
 }
 
-/** スライダー操作が止まってからの待ち時間 */
+/**
+ * スライダー操作が止まってからの待ち時間。
+ * CPU 実装は 1 枚あたり数百 ms かかるので長めに待つ必要があるが、WebGPU なら
+ * 合成が 20ms 程度なので待ち時間の方が支配的になる。GPU が使える環境では短くして
+ * 操作にほぼ追従させる。
+ */
 const DEBOUNCE_MS = 300;
+const DEBOUNCE_MS_GPU = 60;
 
 export const StencilCanvas = forwardRef<
   StencilCanvasHandle,
@@ -82,6 +88,13 @@ export const StencilCanvas = forwardRef<
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // 非同期描画の追い越し防止（最新の描画だけを採用する）
   const renderRunRef = useRef(0);
+  // WebGPU が使えるか（デバウンス時間の切り替えに使う）
+  const gpuReadyRef = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    getGpuDevice().then((d) => { if (alive) gpuReadyRef.current = !!d; });
+    return () => { alive = false; };
+  }, []);
 
   useImperativeHandle(ref, () => ({
     getCanvas: () => canvasRef.current,
@@ -193,7 +206,7 @@ export const StencilCanvas = forwardRef<
           console.error("[stencil] 描画に失敗しました", e);
         }
       }, 0);
-    }, DEBOUNCE_MS);
+    }, gpuReadyRef.current ? DEBOUNCE_MS_GPU : DEBOUNCE_MS);
 
     return () => {
       clearTimeout(timerId);

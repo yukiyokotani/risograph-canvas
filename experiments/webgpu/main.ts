@@ -1,6 +1,6 @@
 // WebGPU パリティ実験のオーケストレーション。
 // CPU 参照(computeStencil) と WebGPU 版を並べ、ピクセル差分を計測する。
-import { computeStencil, type InkDensities, type StencilOptions } from "../../src/lib/stencil";
+import { computeStencil, computeInkDensities, type InkDensities, type StencilOptions } from "../../src/lib/stencil";
 import { renderStencilWebGPU, type GpuStencilInput } from "../../src/lib/stencilGpu";
 
 const PRESETS: Record<string, { name: string; color: string }[]> = {
@@ -37,7 +37,7 @@ async function initGPU() {
   device.lost.then((info) => log("GPU device lost: " + info.message));
 }
 
-async function loadImage(): Promise<ImageData> {
+async function loadImage(maxW: number): Promise<ImageData> {
   const img = new Image();
   img.crossOrigin = "anonymous";
   await new Promise<void>((res, rej) => {
@@ -45,8 +45,7 @@ async function loadImage(): Promise<ImageData> {
     img.onerror = () => rej(new Error("failed to load /sample.jpg"));
     img.src = "/sample.jpg";
   });
-  const maxW = 480;
-  const scale = Math.min(1, maxW / img.naturalWidth);
+  const scale = maxW / img.naturalWidth; // 計測用に拡大も許可
   const w = Math.round(img.naturalWidth * scale);
   const h = Math.round(img.naturalHeight * scale);
   const c = document.createElement("canvas");
@@ -80,8 +79,14 @@ function diffMetrics(a: Uint8ClampedArray, b: Uint8ClampedArray, w: number, h: n
   return { maxD, mean: sum / n, pctOver2: (100 * over2 / n), pctOver8: (100 * over8 / n) };
 }
 
+let loadedSize = 0;
 async function run() {
-  if (!sourceData) return;
+  const size = parseInt(($("size") as HTMLSelectElement).value, 10);
+  if (!sourceData || loadedSize !== size) {
+    log(`loading /sample.jpg at ${size}px…`);
+    sourceData = await loadImage(size);
+    loadedSize = size;
+  }
   const { width: w, height: h } = sourceData;
   const preset = ($("preset") as HTMLSelectElement).value;
   const mode = ($("mode") as HTMLSelectElement).value as "am" | "fm";
@@ -106,14 +111,22 @@ async function run() {
     paperTexture, paperTextureAmount,
   };
 
-  // CPU 参照 + 濃度マップ捕捉
-  let captured: InkDensities | null = null;
-  const t0 = performance.now();
-  const cpuPixels = computeStencil(sourceData as unknown as { data: Uint8ClampedArray; width: number; height: number }, options, (d) => { captured = d; });
-  const cpuMs = performance.now() - t0;
-  draw("cpu", cpuPixels, w, h);
-  if (!captured) { log("no densities captured"); return; }
-  const cap = captured as InkDensities;
+  const skipCpu = ($("skipcpu") as HTMLInputElement).checked;
+
+  // 分解のみ（CPU）の時間 — 高解像度プレビューの可否を左右する部分
+  const td = performance.now();
+  const cap: InkDensities = computeInkDensities(sourceData, options);
+  const decompMs = performance.now() - td;
+
+  // CPU 参照（フル）
+  let cpuPixels: Uint8ClampedArray | null = null;
+  let cpuMs = NaN;
+  if (!skipCpu) {
+    const t0 = performance.now();
+    cpuPixels = computeStencil(sourceData, options);
+    cpuMs = performance.now() - t0;
+    draw("cpu", cpuPixels, w, h);
+  }
 
   // WebGPU
   const gpuInput: GpuStencilInput = {
@@ -131,10 +144,17 @@ async function run() {
     const gpuPixels = await renderStencilWebGPU(device!, gpuInput);
     const gpuMs = performance.now() - t1;
     draw("gpu", gpuPixels, w, h);
-    const m = diffMetrics(cpuPixels, gpuPixels, w, h);
+    const parity = cpuPixels
+      ? (() => { const m = diffMetrics(cpuPixels, gpuPixels, w, h);
+          return `\ndiff: max ${m.maxD}  mean ${m.mean.toFixed(2)}  |  >2: ${m.pctOver2.toFixed(2)}%  >8: ${m.pctOver8.toFixed(2)}%`; })()
+      : "\n(CPU skipped)";
+    const cpuTxt = skipCpu ? "—" : `${cpuMs.toFixed(0)}ms`;
+    const speedup = skipCpu ? "" : `  → ${(cpuMs / gpuMs).toFixed(1)}× faster`;
     metricsEl.textContent =
-      `size ${w}×${h}  |  CPU ${cpuMs.toFixed(1)}ms  GPU ${gpuMs.toFixed(1)}ms` +
-      `\ndiff: max ${m.maxD}  mean ${m.mean.toFixed(2)}  |  >2: ${m.pctOver2.toFixed(2)}%  >8: ${m.pctOver8.toFixed(2)}%`;
+      `size ${w}×${h} (${(w * h / 1e6).toFixed(2)}MP)` +
+      `\n分解(CPU, キャッシュ可): ${decompMs.toFixed(0)}ms` +
+      `\n網点+合成:  CPU ${cpuTxt}   GPU ${gpuMs.toFixed(1)}ms${speedup}` +
+      parity;
     log("done.");
   } catch (e) {
     log("GPU render failed (未実装 or error): " + (e as Error).message);
@@ -146,10 +166,10 @@ async function run() {
   try {
     log("requesting WebGPU device…");
     await initGPU();
-    log("loading /sample.jpg…");
-    sourceData = await loadImage();
     ($("run") as HTMLButtonElement).onclick = run;
-    for (const id of ["preset", "mode", "dot", "fx"]) ($(id) as HTMLSelectElement).onchange = run;
+    for (const id of ["preset", "mode", "dot", "fx", "size", "skipcpu"]) {
+      ($(id) as HTMLElement).onchange = run;
+    }
     await run();
   } catch (e) {
     log("init failed: " + (e as Error).message);
