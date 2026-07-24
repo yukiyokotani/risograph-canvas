@@ -28,12 +28,15 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import { DiscoverDialog } from "./components/DiscoverDialog";
+import { DISCOVER_FIXED, type Candidate } from "./lib/discover";
 import { usePanZoom } from "./hooks/usePanZoom";
 import { useSettingsHistory } from "./hooks/useSettingsHistory";
 import {
   useRecentSettings,
   type StencilSettings,
 } from "./hooks/useRecentSettings";
+import { useVisualHistory } from "./hooks/useVisualHistory";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -563,6 +566,7 @@ function App() {
 
   // WebGPU が使えるか（使えるときだけ高解像度プレビューを有効化）
   const [gpuAvailable, setGpuAvailable] = useState(false);
+  const [discoverOpen, setDiscoverOpen] = useState(false);
   useEffect(() => {
     let alive = true;
     getGpuDevice().then((d) => { if (alive) setGpuAvailable(!!d); });
@@ -689,9 +693,9 @@ function App() {
   };
 
   /**
-   * 設定をランダムに振る（当たりをつける用）。
-   * インク色は崩壊を避けるためプリセットから自動選択し、
-   * 点のサイズ・濃度・ハーフトーンモード・色分解モードをシャッフルする。
+   * 設定をランダムに振る（当たりをつける用 / WebGPU が無い環境のフォールバック）。
+   * インク色は崩壊を避けるためプリセットから自動選択し、点設定は Discover と同じ制約
+   * （AM 固定・dotSize 2–6・density 1.0–1.4）でシャッフルする。Dot Density は使わない。
    */
   const randomize = () => {
     const pick = <T,>(arr: readonly T[]): T =>
@@ -703,13 +707,40 @@ function App() {
     setColors([...preset.colors]);
 
     // 点のサイズ / 濃度 / モード（極端に崩れない範囲で）
-    setDotSize(pick([0.5, 1, 1.5, 2, 3, 4, 6]));
-    setDensity(pick([1, 1.2, 1.4, 1.6, 1.8, 2]));
-    setHalftoneMode(pick<HalftoneMode>(["fm", "am"]));
+    setDotSize(pick([2, 2.5, 3, 3.5, 4, 5, 6]));
+    setDensity(pick([1, 1.1, 1.2, 1.3, 1.4]));
+    setHalftoneMode("am");
     setColorMode(pick<ColorMode>(["natural", "bold"]));
     setGamutCutoff(pick([0.3, 0.5, 0.7]));
     setPaperTexture(pick<PaperTexture>(["felt", "fiber", "none"]));
     setPaperTextureAmount(pick([0.3, 0.5, 0.7]));
+  };
+
+  /** Discover のサムネイルを選んで確定したとき、その候補の設定を丸ごと反映する。 */
+  const applyCandidate = (cand: Candidate) => {
+    setColors([...cand.colors]);
+    setPaperColor(cand.paperColor);
+    setInvert(cand.invert);
+    setDotSize(cand.dotSize);
+    setDensity(cand.density);
+    setInkOpacity(cand.inkOpacity);
+    setMisregistration(cand.misregistration);
+    setHalftoneMode(cand.halftoneMode);
+    setPaperTexture(cand.paperTexture);
+    setColorMode(DISCOVER_FIXED.colorMode);
+    setGamutCutoff(DISCOVER_FIXED.gamutThreshold);
+    setBlackGeneration(DISCOVER_FIXED.blackGeneration);
+    setHighlightCutoff(cand.highlightCutoff);
+    setNoise(DISCOVER_FIXED.noise);
+    setPaperTextureAmount(DISCOVER_FIXED.paperTextureAmount);
+    setTransparentBg(false);
+    setPresetKey("");
+  };
+
+  /** Shuffle ボタン: GPU があれば Discover グリッド、無ければ従来のシャッフル。 */
+  const handleShuffleClick = () => {
+    if (gpuAvailable) setDiscoverOpen(true);
+    else randomize();
   };
 
   // 黒/グレーの中立インクを含むか（GCR = 黒生成が効く構成か）を判定。
@@ -742,6 +773,14 @@ function App() {
     invert,
   };
   const { recent, remove: removeRecent } = useRecentSettings(currentSettings);
+  // WebGPU 環境は「見た目つき履歴」（メモリのみ・多め）。CPU は従来の localStorage 履歴。
+  const getCanvas = useCallback(() => canvasRef.current?.getCanvas() ?? null, []);
+  const { history: visualHistory } = useVisualHistory(
+    currentSettings,
+    getCanvas,
+    gpuAvailable,
+    imageSrc,
+  );
   const [recentOpen, setRecentOpen] = useState(false);
 
   const applySettings = useCallback((s: StencilSettings) => {
@@ -924,7 +963,7 @@ function App() {
                     size="icon"
                     className="h-9 w-9 shrink-0"
                     title="Recent settings"
-                    disabled={recent.length === 0}
+                    disabled={(gpuAvailable ? visualHistory.length : recent.length) === 0}
                   >
                     <History className="h-4 w-4" />
                     <span className="sr-only">Recent settings</span>
@@ -932,8 +971,42 @@ function App() {
                 </PopoverTrigger>
                 <PopoverContent align="start" className="w-72 p-2">
                   <div className="mb-1 px-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                    Recent（新しい順）
+                    Recent
                   </div>
+                  {gpuAvailable ? (
+                    <div className="thin-scroll grid max-h-80 grid-cols-3 overflow-y-auto">
+                      {visualHistory.map((e) => (
+                        <button
+                          key={e.id}
+                          onClick={() => {
+                            applySettings(e.settings);
+                            setRecentOpen(false);
+                          }}
+                          title="Apply these settings"
+                          className="group relative aspect-square overflow-hidden bg-muted"
+                        >
+                          <img src={e.thumb} alt="" className="h-full w-full object-cover" />
+                          <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/55 to-transparent px-1.5 pb-1.5 pt-3">
+                            <span className="flex gap-0.5">
+                              {e.settings.colors.slice(0, 5).map((c, i) => (
+                                <span
+                                  key={i}
+                                  className="h-2 w-2 rounded-full ring-1 ring-white/70"
+                                  style={{ background: c.color }}
+                                />
+                              ))}
+                            </span>
+                            <span className="shrink-0 text-[9px] tabular-nums text-white/90">
+                              {new Date(e.savedAt).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
                   <div className="flex flex-col">
                     {recent.map((e) => (
                       <div key={e.id} className="group flex items-center gap-1">
@@ -942,7 +1015,7 @@ function App() {
                             applySettings(e.settings);
                             setRecentOpen(false);
                           }}
-                          title="この設定を適用"
+                          title="Apply these settings"
                           className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-accent"
                         >
                           <span className="flex shrink-0 -space-x-1">
@@ -979,22 +1052,25 @@ function App() {
                       </div>
                     ))}
                   </div>
+                  )}
                 </PopoverContent>
               </Popover>
               {/* Randomize */}
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={randomize}
+                onClick={handleShuffleClick}
                 className="h-9 w-9 shrink-0"
-                title="Randomize settings"
+                title={gpuAvailable ? "Discover colors" : "Randomize settings"}
               >
                 <Shuffle
                   className="h-5 w-5"
                   strokeWidth={2.5}
                   style={{ stroke: "url(#shuffleGrad)" }}
                 />
-                <span className="sr-only">Randomize settings</span>
+                <span className="sr-only">
+                  {gpuAvailable ? "Discover colors" : "Randomize settings"}
+                </span>
               </Button>
               {/* Guide */}
               <Dialog>
@@ -1477,6 +1553,13 @@ function App() {
           GitHub
         </a>
       </footer>
+
+      <DiscoverDialog
+        open={discoverOpen}
+        onOpenChange={setDiscoverOpen}
+        imageSrc={imageSrc}
+        onApply={applyCandidate}
+      />
     </div>
   );
 }

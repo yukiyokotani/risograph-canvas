@@ -162,3 +162,32 @@
     scrollbar-color: oklch(0.5 0 0 / 0.4) transparent;
   }
 }
+
+/* 細い共通スクロールバー（縦・横で見た目を統一。Discover のグリッド/strip で使用） */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.7 0 0 / 0.3) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: oklch(0.7 0 0 / 0.3);
+  border-radius: 4px;
+}
+.thin-scroll::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.5 0 0 / 0.5);
+}
+.dark .thin-scroll {
+  scrollbar-color: oklch(0.5 0 0 / 0.4) transparent;
+}
+.dark .thin-scroll::-webkit-scrollbar-thumb {
+  background: oklch(0.5 0 0 / 0.4);
+}
+.dark .thin-scroll::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.6 0 0 / 0.5);
+}

@@ -72,12 +72,33 @@ export function clearDensityCache(): void {
   densityCache = null;
 }
 
+// すべての描画呼び出しを直列化するためのロック。
+// 共有の densityCache / GPU バッファに複数の描画（例: Discover の大量サムネと
+// メインプレビュー）が同時アクセスすると、片方が相手の densityBuffer を destroy して
+// 空の density で合成される（＝インクが消える）ため、グローバルに1本ずつ実行する。
+let renderLock: Promise<unknown> = Promise.resolve();
+
 /**
  * WebGPU 優先でステンシルを描画し、RGBA ピクセルを返す。
  * 分解→合成を GPU バッファで直結し、濃度はキャッシュする（分解に効くパラメータが
  * 変わったときだけ再分解）。WebGPU が使えない/失敗時は CPU 実装へフォールバック。
+ *
+ * 共有 GPU 状態の競合を防ぐため、呼び出しはグローバルに直列化する。
  */
-export async function renderStencilPixels(
+export function renderStencilPixels(
+  source: ImageDataLike,
+  options: StencilOptions
+): Promise<Uint8ClampedArray> {
+  const run = renderLock.then(() => renderStencilPixelsInner(source, options));
+  // 失敗しても後続を止めない（チェーンは常に解決扱いにする）
+  renderLock = run.then(
+    () => {},
+    () => {},
+  );
+  return run;
+}
+
+async function renderStencilPixelsInner(
   source: ImageDataLike,
   options: StencilOptions
 ): Promise<Uint8ClampedArray> {
