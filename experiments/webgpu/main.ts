@@ -2,6 +2,7 @@
 // CPU 参照(computeStencil) と WebGPU 版を並べ、ピクセル差分を計測する。
 import { computeStencil, computeInkDensities, type InkDensities, type StencilOptions } from "../../src/lib/stencil";
 import { renderStencilWebGPU, type GpuStencilInput } from "../../src/lib/stencilGpu";
+import { computeInkDensitiesWebGPU } from "../../src/lib/stencilDecomposeGpu";
 
 const PRESETS: Record<string, { name: string; color: string }[]> = {
   tricolor: [
@@ -112,11 +113,32 @@ async function run() {
   };
 
   const skipCpu = ($("skipcpu") as HTMLInputElement).checked;
+  const useGpuDecompose = ($("gpudecomp") as HTMLInputElement).checked;
 
-  // 分解のみ（CPU）の時間 — 高解像度プレビューの可否を左右する部分
+  // 分解（CPU 参照）— GPU 分解のパリティ比較にも使う
   const td = performance.now();
   const cap: InkDensities = computeInkDensities(sourceData, options);
   const decompMs = performance.now() - td;
+
+  // GPU 分解（任意）: CPU の密度マップと per-ink で差分を取る
+  let densInfo = "";
+  let densForGpu = cap;
+  if (useGpuDecompose) {
+    try {
+      const tg = performance.now();
+      const gpuDens = await computeInkDensitiesWebGPU(device!, sourceData, options);
+      const gpuDecompMs = performance.now() - tg;
+      densForGpu = gpuDens;
+      let maxD = 0, sum = 0, n = 0;
+      for (let k = 0; k < cap.densityMaps.length; k++) {
+        const a = cap.densityMaps[k], b = gpuDens.densityMaps[k];
+        for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); if (d > maxD) maxD = d; sum += d; n++; }
+      }
+      densInfo = `\n分解パリティ(密度0-1): max ${maxD.toFixed(4)} mean ${(sum / n).toFixed(5)}  | 分解 CPU ${decompMs.toFixed(0)}ms → GPU ${gpuDecompMs.toFixed(1)}ms`;
+    } catch (e) {
+      densInfo = `\nGPU 分解 失敗: ${(e as Error).message}`;
+    }
+  }
 
   // CPU 参照（フル）
   let cpuPixels: Uint8ClampedArray | null = null;
@@ -128,12 +150,12 @@ async function run() {
     draw("cpu", cpuPixels, w, h);
   }
 
-  // WebGPU
+  // WebGPU（分解は densForGpu = CPU or GPU）
   const gpuInput: GpuStencilInput = {
-    densityMaps: cap.densityMaps,
-    angles: cap.angles,
-    inkRgbs: cap.inkRgbs,
-    paper: cap.paper,
+    densityMaps: densForGpu.densityMaps,
+    angles: densForGpu.angles,
+    inkRgbs: densForGpu.inkRgbs,
+    paper: densForGpu.paper,
     width: w, height: h,
     dotSize, density: 1.2, inkOpacity: 0.85,
     halftoneMode: mode, transparentBg: false,
@@ -154,6 +176,7 @@ async function run() {
       `size ${w}×${h} (${(w * h / 1e6).toFixed(2)}MP)` +
       `\n分解(CPU, キャッシュ可): ${decompMs.toFixed(0)}ms` +
       `\n網点+合成:  CPU ${cpuTxt}   GPU ${gpuMs.toFixed(1)}ms${speedup}` +
+      densInfo +
       parity;
     log("done.");
   } catch (e) {
@@ -167,7 +190,7 @@ async function run() {
     log("requesting WebGPU device…");
     await initGPU();
     ($("run") as HTMLButtonElement).onclick = run;
-    for (const id of ["preset", "mode", "dot", "fx", "size", "skipcpu"]) {
+    for (const id of ["preset", "mode", "dot", "fx", "size", "skipcpu", "gpudecomp"]) {
       ($(id) as HTMLElement).onchange = run;
     }
     await run();

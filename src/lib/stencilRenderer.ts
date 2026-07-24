@@ -9,12 +9,12 @@
  */
 import {
   computeStencil,
-  computeInkDensities,
   type StencilOptions,
   type ImageDataLike,
   type InkDensities,
 } from "./stencil";
 import { renderStencilWebGPU, type GpuStencilInput } from "./stencilGpu";
+import { computeInkDensitiesWebGPU } from "./stencilDecomposeGpu";
 
 /** 版ずれ・グレインの既定シード（stencil.ts と一致させる） */
 const DEFAULT_SEED = 0x5f3759df;
@@ -111,7 +111,8 @@ export async function renderStencilPixels(
       let densities =
         densityCache && densityCache.key === key ? densityCache.densities : null;
       if (!densities) {
-        densities = computeInkDensities(source, options);
+        // 分解も GPU で（LUT ではなく直接移植なので出力は CPU と一致）。
+        densities = await computeInkDensitiesWebGPU(device, source, options);
         densityCache = { key, densities };
       }
       return await renderStencilWebGPU(device, toGpuInput(densities, options));
