@@ -426,8 +426,11 @@ export async function decomposeToGpuBuffer(
     const blue = (255 - ink.b) / 255;
     return Math.hypot(red, green, blue) < 0.05;
   });
+  // 単色は色合わせが破綻するため、低吸収インクと同じく輝度ベースにする（CPU と一致）。
+  const singleInk = inkCount === 1;
+  const useLuminance = inkRgbs.map((_, index) => isLowAbsorption[index] || singleInk);
   const isNeutral = inkRgbs.map((ink, index) => {
-    if (isLowAbsorption[index]) return false;
+    if (useLuminance[index]) return false;
     const [, a, b] = rgbToLab(ink.r, ink.g, ink.b);
     return Math.hypot(a, b) < 12;
   });
@@ -435,7 +438,7 @@ export async function decomposeToGpuBuffer(
   const neutralIndices: number[] = [];
   let chromaticCount = 0;
   for (let index = 0; index < inkCount; index++) {
-    if (isLowAbsorption[index]) continue;
+    if (useLuminance[index]) continue;
     if (isNeutral[index]) neutralIndices.push(index);
     else chromaticCount++;
   }
@@ -446,7 +449,7 @@ export async function decomposeToGpuBuffer(
   const decompIndexMap: number[] = [];
   const decompInks: RGB[] = [];
   for (let index = 0; index < inkCount; index++) {
-    if (isLowAbsorption[index] || (useGcr && index === kIndex)) continue;
+    if (useLuminance[index] || (useGcr && index === kIndex)) continue;
     decompIndexMap.push(index);
     decompInks.push(inkRgbs[index]);
   }
@@ -501,7 +504,7 @@ export async function decomposeToGpuBuffer(
   const metaData = new Uint32Array(MAX_INKS * 2);
   metaData.set(decompIndexMap);
   for (let index = 0; index < inkCount; index++) {
-    metaData[MAX_INKS + index] = isLowAbsorption[index] ? 1 : 0;
+    metaData[MAX_INKS + index] = useLuminance[index] ? 1 : 0;
   }
 
   const tableData = new Float32Array(MAX_INKS * TABLE_SIZE);
