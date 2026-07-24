@@ -601,13 +601,34 @@ function applyBlackGeneration(
 }
 
 /**
+ * 各色版の濃度マップとスクリーン角度（色分解〜後処理の結果）。
+ * GPU など別の合成器で網点・合成を行うために computeStencil から取り出せる。
+ */
+export interface InkDensities {
+  /** 各色版の濃度マップ（0-1、colors と同じ並び） */
+  densityMaps: Float32Array[];
+  /** 各色版のスクリーン角度（度、colors と同じ並び） */
+  angles: number[];
+  /** 紙色 (RGB 0-255) */
+  paper: RGB;
+  /** インク RGB（colors と同じ並び） */
+  inkRgbs: RGB[];
+  width: number;
+  height: number;
+}
+
+/**
  * DOM 非依存のステンシル印刷処理。
  * ソースのピクセルデータを受け取り、加工済みのピクセル配列を返す。
  * Web Worker からも呼び出し可能。
+ *
+ * onDensities を渡すと、網点・合成の直前の濃度マップ＋角度を受け取れる
+ * （GPU 実装のパリティ検証・移植用。通常の描画結果には影響しない）。
  */
 export function computeStencil(
   sourceData: ImageDataLike,
-  options: StencilOptions
+  options: StencilOptions,
+  onDensities?: (d: InkDensities) => void
 ): Uint8ClampedArray {
   const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, blackGeneration = 0.7, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
   const { width, height } = sourceData;
@@ -765,6 +786,18 @@ export function computeStencil(
       autoAngles[colorIdx] =
         RISO_SCREEN_ANGLES[rank % RISO_SCREEN_ANGLES.length];
     });
+
+  // GPU パイプライン等へ濃度マップ＋角度を引き渡す（描画結果には影響しない）
+  if (onDensities) {
+    onDensities({
+      densityMaps,
+      angles: colors.map((c, ci) => c.angle ?? autoAngles[ci]),
+      paper,
+      inkRgbs,
+      width,
+      height,
+    });
+  }
 
   // 各色レイヤーを乗算で合成（インク同士の減法混色）
   for (let ci = 0; ci < colors.length; ci++) {
