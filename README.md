@@ -2,7 +2,7 @@
 
 Multi-color stencil print simulator built with React + TypeScript + Canvas API.
 
-**Demo:** https://yukiyokotani.github.io/stencil-canvas/
+**Demo:** https://stencil-canvas.silurus.dev/
 
 ## Features
 

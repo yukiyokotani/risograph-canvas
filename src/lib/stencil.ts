@@ -301,6 +301,8 @@ function decomposeColors(
   const densities = new Float64Array(n);
   // 残差用: 濃度上限なし(≥0のみ)の解
   const densitiesU = new Float64Array(n);
+  // 画素ループの外で確保する（中で作ると 4x 書き出しで数百万回の確保になる）
+  const dotInkTarget = new Float64Array(n);
 
   for (let p = 0; p < pixelCount; p++) {
     const off = p * 4;
@@ -316,7 +318,6 @@ function decomposeColors(
     const tb = ((paper.b - data[off + 2]) / 255) * alpha;
 
     // 各インクと target のドット積
-    const dotInkTarget = new Float64Array(n);
     for (let i = 0; i < n; i++) {
       dotInkTarget[i] =
         inkDeltas[i][0] * tr +
@@ -421,16 +422,27 @@ export function buildLightnessTable(
   return table;
 }
 
-/** 明度表(単調減少)から目標 L* に一致する density(0-1) を線形補間で逆引き */
+/**
+ * 明度表から目標 L* に一致する density(0-1) を線形補間で逆引きする。
+ *
+ * 表は紙色から始まりインクを盛るほど変化するので、単調ではあるが向きは一定でない。
+ * インクが紙より明るい場合（暗い紙に明るいインクを刷る＝Invert の主用途）は
+ * **増加**する。向きを見ずに減少前提で探すと、そのケースで常に 0 を返してしまい、
+ * スナップ・黒生成がインクを消してしまう。両方向に対応する。
+ */
 export function coverageForLightness(table: Float32Array, targetL: number): number {
   const steps = table.length - 1;
-  if (targetL >= table[0]) return 0;
-  if (targetL <= table[steps]) return 1;
+  const ascending = table[steps] > table[0];
+  if (ascending ? targetL <= table[0] : targetL >= table[0]) return 0;
+  if (ascending ? targetL >= table[steps] : targetL <= table[steps]) return 1;
   for (let k = 0; k < steps; k++) {
     const l0 = table[k];
     const l1 = table[k + 1];
-    if (targetL <= l0 && targetL >= l1) {
-      const f = l0 === l1 ? 0 : (l0 - targetL) / (l0 - l1);
+    const lo = ascending ? l0 : l1;
+    const hi = ascending ? l1 : l0;
+    if (targetL >= lo && targetL <= hi) {
+      const span = l1 - l0;
+      const f = span === 0 ? 0 : (targetL - l0) / span;
       return (k + f) / steps;
     }
   }

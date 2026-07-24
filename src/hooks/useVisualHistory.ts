@@ -71,10 +71,14 @@ export function useVisualHistory(
   const [history, setHistory] = useState<VisualHistoryEntry[]>([]);
   const currentId = JSON.stringify(current);
 
-  // 画像が変わったら履歴を破棄する。
-  useEffect(() => {
+  // 画像が変わったら履歴を破棄する。effect で setState すると余計な再レンダーが
+  // 1 往復増える（マウント時にも走る）ので、レンダー中に検知して捨てる
+  // （React 公式の「レンダー中に state を調整する」パターン）。
+  const [prevResetKey, setPrevResetKey] = useState(resetKey);
+  if (prevResetKey !== resetKey) {
+    setPrevResetKey(resetKey);
     setHistory([]);
-  }, [resetKey]);
+  }
 
   // 初期表示（デフォルト値）を含め、設定が一定時間落ち着くたびにスナップショットを控える。
   useEffect(() => {

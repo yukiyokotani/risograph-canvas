@@ -29,8 +29,9 @@ export function getGpuDevice(): Promise<GPUDevice | null> {
         const adapter = await navigator.gpu.requestAdapter();
         if (!adapter) return null;
         const device = await adapter.requestDevice();
-        // デバイスロスト時は次回に再取得させる
-        device.lost.then(() => { devicePromise = null; });
+        // デバイスロスト時は次回に再取得させる。失われたデバイス上のバッファを
+        // 抱えたままだと、次の描画でそれを渡してしまい 1 フレーム無駄に失敗する。
+        device.lost.then(() => { devicePromise = null; clearDensityCache(); });
         return device;
       } catch {
         return null;

@@ -522,6 +522,15 @@ function App() {
   const [guideLang, setGuideLang] = useState<GuideLang>("en");
 
   const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  // アップロードした画像の Blob URL（次の画像を選んだら解放する）
+  const objectUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    };
+  }, []);
 
   // Track image aspect ratio (width / height)
   const [imageAspect, setImageAspect] = useState<number | null>(null);
@@ -599,15 +608,9 @@ function App() {
   const handleDownload = async () => {
     const scale = Number(downloadScale);
 
-    // 1x: プレビュー Canvas をそのまま保存（＝ベース解像度）
-    if (scale === 1) {
-      const canvas = canvasRef.current?.getCanvas();
-      if (!canvas) return;
-      await saveImageFromCanvas(canvas, "stencil.png");
-      return;
-    }
-
-    // 高解像度: Web Worker でオフスレッド処理し、プレビューを忠実にスケールアップ。
+    // どの倍率でも BASE_WIDTH×scale で描き直す。プレビュー Canvas は画面サイズ・
+    // ズーム・DPR に応じて内部解像度が上がる（qualityScale）ので、それをそのまま
+    // 保存すると「1x (600px)」なのに 1800px 出力、といったラベルとの食い違いが起きる。
     // renderScale によりドットサイズ・版ずれ等をベースの scale 倍にするため、
     // 点が細かくなるのではなくプレビューがそのまま高解像度化される。
     setDownloading(true);
@@ -674,6 +677,13 @@ function App() {
       ctx.putImageData(output, 0, 0);
 
       await saveImageFromCanvas(offscreen, "stencil.png");
+      setDownloadError(null);
+    } catch (e) {
+      // 握り潰すと未処理の rejection になり、ユーザーには何も起きていないように見える
+      console.error("[stencil] 書き出しに失敗しました", e);
+      setDownloadError(
+        e instanceof Error ? e.message : "Export failed. Please try again."
+      );
     } finally {
       setDownloading(false);
     }
@@ -834,6 +844,10 @@ function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
+    // 前に選んだ画像の Blob URL を解放する（放置するとファイル本体を掴んだままになる）
+    const prev = objectUrlRef.current;
+    objectUrlRef.current = url;
+    if (prev) setTimeout(() => URL.revokeObjectURL(prev), 0);
     setImageSrc(url);
   };
 
@@ -1285,6 +1299,7 @@ function App() {
                   {c.name}
                   <button
                     onClick={() => removeColor(i)}
+                    aria-label={`Remove ${c.name}`}
                     className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
                   >
                     ×
@@ -1511,6 +1526,15 @@ function App() {
 
           {/* Download (bottom-right) */}
           <div className={`pointer-events-auto absolute bottom-3 right-3 flex items-center gap-2 rounded-lg p-1.5 shadow-sm ${GLASS_SURFACE}`}>
+            {downloadError && (
+              <span
+                role="alert"
+                className="max-w-[16rem] truncate text-xs text-destructive"
+                title={downloadError}
+              >
+                {downloadError}
+              </span>
+            )}
             <Select value={downloadScale} onValueChange={setDownloadScale}>
               <SelectTrigger className="h-9 w-28 text-xs">
                 <SelectValue />
