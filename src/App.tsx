@@ -191,7 +191,7 @@ const guide = {
       },
       {
         heading: "Density",
-        body: "Overall ink amount. Higher values print darker and more saturated; in Dot Size mode the darkest areas fill in more (dots merge toward solid).",
+        body: "Below 1, this simply thins the ink — the whole print gets lighter.\n\nAbove 1 it works as tonal punch rather than a flat boost: midtones pivot, so dark areas close up toward solid while light areas open up. A flat boost would push every tone into the range where neighbouring dots merge, and whole areas of different tone would flatten into one solid patch (most visible with a large Dot Size). Pivoting keeps the deepest tone near solid while the tone just below it stays as distinct, large dots — so you get heavy dots and still read the boundaries.",
       },
       {
         heading: "Separation strength",
@@ -260,7 +260,7 @@ const guide = {
       },
       {
         heading: "濃度 (Density)",
-        body: "インク全体量のスケールです。高いほど濃く彩度が上がります。Dot Size モードでは最暗部がより詰まり、点が融合してベタに近づきます。",
+        body: "1 未満はインク量そのものを薄くします（全体が淡くなります）。\n\n1 を超える領域では「一律に濃くする」のではなく、中間調を軸にトーンを立てます（濃い側は詰まり、薄い側は抜ける）。一律に濃くすると全部のトーンが「隣の点と融合する濃さ」まで押し上げられ、色や明るさの違う面同士が同じベタ面に潰れてしまいます（Dot Size が大きいほど顕著）。中間調を軸にすることで、最暗部だけがベタ近くまで詰まり、その一段下は大きな点のまま残るので、点の力強さと境界の見分けやすさが両立します。",
       },
       {
         heading: "分離の強さ (Separation strength)",

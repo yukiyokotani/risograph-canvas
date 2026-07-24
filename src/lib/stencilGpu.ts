@@ -196,6 +196,28 @@ fn roundToByte(value: f32) -> u32 {
   return u32(clamp(floor(value + 0.5), 0.0, 255.0));
 }
 
+// Density カーブ（CPU halftone.ts の densityCurve と同じ定義）。
+// 1 以下は一律スケール、1 超は中間調ピボットを軸にコントラストを立てる。
+const DENSITY_PIVOT: f32 = 0.5;
+const DENSITY_CONTRAST: f32 = 1.2;
+
+fn densityCurve(d: f32, density: f32) -> f32 {
+  if (density <= 1.0) {
+    return min(d * density, 1.0);
+  }
+  if (d <= 0.0) {
+    return 0.0;
+  }
+  if (d >= 1.0) {
+    return 1.0;
+  }
+  let contrast = 1.0 + (density - 1.0) * DENSITY_CONTRAST;
+  if (d < DENSITY_PIVOT) {
+    return DENSITY_PIVOT * pow(d / DENSITY_PIVOT, contrast);
+  }
+  return 1.0 - (1.0 - DENSITY_PIVOT) * pow((1.0 - d) / (1.0 - DENSITY_PIVOT), contrast);
+}
+
 fn densityAt(dotRx: f32, dotRy: f32, inkIndex: u32) -> f32 {
   let ink = inks[inkIndex];
   let cosine = ink.geometry.x;
@@ -212,7 +234,7 @@ fn densityAt(dotRx: f32, dotRy: f32, inkIndex: u32) -> f32 {
 
   let mapOffset = inkIndex * params.width * params.height;
   let pixelOffset = u32(imageY) * params.width + u32(imageX);
-  return min(densityMaps[mapOffset + pixelOffset] * params.densityScale, 1.0);
+  return densityCurve(densityMaps[mapOffset + pixelOffset], params.densityScale);
 }
 
 fn cellHash(x: i32, y: i32) -> f32 {
