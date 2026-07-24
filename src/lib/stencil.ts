@@ -397,7 +397,7 @@ const smoothstep = (a: number, b: number, x: number): number => {
  * ガモット外の色を「支配的インク単色で明度を保ったまま」再現する際、目標明度に
  * 一致する単色 density を逆引きするのに使う。
  */
-function buildLightnessTable(
+export function buildLightnessTable(
   ink: RGB,
   paper: RGB,
   inkOpacity: number,
@@ -422,7 +422,7 @@ function buildLightnessTable(
 }
 
 /** 明度表(単調減少)から目標 L* に一致する density(0-1) を線形補間で逆引き */
-function coverageForLightness(table: Float32Array, targetL: number): number {
+export function coverageForLightness(table: Float32Array, targetL: number): number {
   const steps = table.length - 1;
   if (targetL >= table[0]) return 0;
   if (targetL <= table[steps]) return 1;
