@@ -88,10 +88,6 @@ export const PRESETS = {
     name: "Retro (Teal + Orange)",
     colors: [INKS.teal, INKS.orange],
   },
-  neon: {
-    name: "Neon (Fl. Pink + Fl. Green)",
-    colors: [INKS.fluorescentPink, INKS.fluorescentGreen],
-  },
   tricolor: {
     name: "Tricolor (Blue + Red + Yellow)",
     colors: [INKS.blue, INKS.brightRed, INKS.yellow],
@@ -145,6 +141,10 @@ export const PRESETS = {
   fluorPinkBlue: {
     name: "Fl. Pink + Fl. Blue",
     colors: [INKS.fluorescentPink, INKS.fluorescentBlue],
+  },
+  fluorPinkGreen: {
+    name: "Fl. Pink + Fl. Green",
+    colors: [INKS.fluorescentPink, INKS.fluorescentGreen],
   },
   fluorPinkYellow: {
     name: "Fl. Pink + Fl. Yellow",
