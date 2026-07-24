@@ -87,14 +87,23 @@ async function run() {
   const mode = ($("mode") as HTMLSelectElement).value as "am" | "fm";
   const dotSize = parseFloat(($("dot") as HTMLSelectElement).value);
 
-  // パリティ検証のため、ハッシュ系エフェクト(noise/grain/misreg/texture)はオフ。
+  // エフェクト(版ずれ/グレイン/ノイズ/紙テクスチャ)の ON/OFF でパリティを切り分ける
+  const fx = ($("fx") as HTMLSelectElement).value !== "off";
+  const misregistration = fx ? 2 : 0;
+  const grain = fx ? 0.1 : 0;
+  const noise = fx ? 0.15 : 0;
+  const paperTexture = (fx ? "fiber" : "none") as "none" | "felt" | "fiber";
+  const paperTextureAmount = fx ? 0.5 : 0;
+  const seed = 0x5f3759df;
+  const renderScale = 1;
+
   const options: StencilOptions = {
     colors: PRESETS[preset],
-    dotSize, misregistration: 0, grain: 0, density: 1.2, inkOpacity: 0.85,
+    dotSize, misregistration, grain, density: 1.2, inkOpacity: 0.85,
     paperColor: "#f5f0e8", halftoneMode: mode, colorMode: "natural",
     gamutThreshold: 0.5, blackGeneration: 0.7, highlightCutoff: 0,
-    noise: 0, transparentBg: false, invert: false, renderScale: 1,
-    paperTexture: "none", paperTextureAmount: 0,
+    noise, transparentBg: false, invert: false, renderScale, seed,
+    paperTexture, paperTextureAmount,
   };
 
   // CPU 参照 + 濃度マップ捕捉
@@ -115,6 +124,7 @@ async function run() {
     width: w, height: h,
     dotSize, density: 1.2, inkOpacity: 0.85,
     halftoneMode: mode, transparentBg: false,
+    misregistration, grain, noise, seed, paperTexture, paperTextureAmount, renderScale,
   };
   try {
     const t1 = performance.now();
@@ -139,7 +149,7 @@ async function run() {
     log("loading /sample.jpg…");
     sourceData = await loadImage();
     ($("run") as HTMLButtonElement).onclick = run;
-    for (const id of ["preset", "mode", "dot"]) ($(id) as HTMLSelectElement).onchange = run;
+    for (const id of ["preset", "mode", "dot", "fx"]) ($(id) as HTMLSelectElement).onchange = run;
     await run();
   } catch (e) {
     log("init failed: " + (e as Error).message);

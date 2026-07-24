@@ -25,6 +25,22 @@ export interface GpuStencilInput {
   halftoneMode: "am" | "fm";
   /** true なら紙を落としインクのみ（アルファ付き）を返す */
   transparentBg: boolean;
+
+  // --- 以下は CPU 実装(stencil.ts)と同じ数式で再現するエフェクト ---
+  /** 版ずれ量(px, renderScale 適用済み)。0 で無効 */
+  misregistration: number;
+  /** グレイン強度 0-1。0 で無効 */
+  grain: number;
+  /** 掠れノイズ 0-0.5。0 で無効 */
+  noise: number;
+  /** 版ずれ・グレイン・テクスチャの疑似乱数シード */
+  seed: number;
+  /** 紙テクスチャの種類 */
+  paperTexture: "none" | "felt" | "fiber";
+  /** 紙テクスチャの強さ 0-1 */
+  paperTextureAmount: number;
+  /** 描画スケール（テクスチャの特徴サイズに比例させる） */
+  renderScale: number;
 }
 
 /** RGBA 8bit ピクセル (length = width*height*4) を返す。 */
@@ -46,6 +62,13 @@ export async function renderStencilWebGPU(
     inkOpacity,
     halftoneMode,
     transparentBg,
+    misregistration,
+    grain,
+    noise,
+    seed,
+    paperTexture,
+    paperTextureAmount,
+    renderScale,
   } = input;
 
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 0 || height < 0) {
@@ -110,6 +133,16 @@ struct Params {
   paperR: f32,
   paperG: f32,
   paperB: f32,
+
+  misregistration: f32,
+  grain: f32,
+  noise: f32,
+  renderScale: f32,
+
+  seed: u32,
+  paperTexture: u32,
+  paperTextureAmount: f32,
+  _effectsPadding: u32,
 }
 
 struct Ink {
@@ -164,6 +197,178 @@ fn cellHash(x: i32, y: i32) -> f32 {
   hash = (hash ^ (hash >> 13u)) * 1274126177u;
   hash = hash ^ (hash >> 16u);
   return f32(hash) * (1.0 / 4294967296.0);
+}
+
+fn roundIntegerToDoubleUlp(value: u32, quantum: u32) -> u32 {
+  if (quantum == 1u) {
+    return value;
+  }
+  let mask = quantum - 1u;
+  let half = quantum >> 1u;
+  let remainder = value & mask;
+  var rounded = value & ~mask;
+  // IEEE-754 round-to-nearest, ties-to-even. The quantum is at most 512,
+  // so the low u32 contains all bits needed for the rounding decision.
+  if (
+    remainder > half ||
+    (remainder == half && ((rounded / quantum) & 1u) != 0u)
+  ) {
+    rounded += quantum;
+  }
+  return rounded;
+}
+
+fn seedDoubleQuantum(seed: u32) -> u32 {
+  // ULP of f64(seed * 1013904223). Thresholds are
+  // ceil(2^exponent / 1013904223).
+  if (seed >= 2274221724u) { return 512u; }
+  if (seed >= 1137110862u) { return 256u; }
+  if (seed >= 568555431u) { return 128u; }
+  if (seed >= 284277716u) { return 64u; }
+  if (seed >= 142138858u) { return 32u; }
+  if (seed >= 71069429u) { return 16u; }
+  if (seed >= 35534715u) { return 8u; }
+  if (seed >= 17767358u) { return 4u; }
+  if (seed >= 8883679u) { return 2u; }
+  return 1u;
+}
+
+fn scuffHash(x: i32, y: i32, seed: u32) -> f32 {
+  let quantum = seedDoubleQuantum(seed);
+  let seedProduct = roundIntegerToDoubleUlp(seed * 1013904223u, quantum);
+  let coordinates =
+    bitcast<u32>(x) * 374761393u +
+    bitcast<u32>(y) * 668265263u;
+
+  // The CPU's first expression uses Number multiplication/addition before
+  // |0. For a large seed, emulate f64's lost low bits with u32 operations;
+  // using seed * constant modulo 2^32 directly produces a different hash.
+  var hash = roundIntegerToDoubleUlp(seedProduct + coordinates, quantum);
+  // From here, u32 arithmetic exactly matches Math.imul and logical >>>.
+  hash = (hash ^ (hash >> 13u)) * 1274126177u;
+  hash = hash ^ (hash >> 16u);
+  return f32(hash) * (1.0 / 4294967296.0);
+}
+
+fn smoothNoise(x: f32, y: f32, cellSize: f32, seed: u32) -> f32 {
+  let gx = i32(floor(x / cellSize));
+  let gy = i32(floor(y / cellSize));
+  let fx = x / cellSize - f32(gx);
+  let fy = y / cellSize - f32(gy);
+
+  // Keep the CPU helper's corner order and interpolation expression.
+  let n00 = scuffHash(gx, gy, seed);
+  let n10 = scuffHash(gx + 1, gy, seed);
+  let n01 = scuffHash(gx, gy + 1, seed);
+  let n11 = scuffHash(gx + 1, gy + 1, seed);
+  let sx = fx * fx * (3.0 - 2.0 * fx);
+  let sy = fy * fy * (3.0 - 2.0 * fy);
+  return
+    (n00 * (1.0 - sx) + n10 * sx) * (1.0 - sy) +
+    (n01 * (1.0 - sx) + n11 * sx) * sy;
+}
+
+fn smoothNoiseAniso(
+  x: f32,
+  y: f32,
+  cellX: f32,
+  cellY: f32,
+  seed: u32
+) -> f32 {
+  let gx = i32(floor(x / cellX));
+  let gy = i32(floor(y / cellY));
+  let fx = x / cellX - f32(gx);
+  let fy = y / cellY - f32(gy);
+  let n00 = scuffHash(gx, gy, seed);
+  let n10 = scuffHash(gx + 1, gy, seed);
+  let n01 = scuffHash(gx, gy + 1, seed);
+  let n11 = scuffHash(gx + 1, gy + 1, seed);
+  let sx = fx * fx * (3.0 - 2.0 * fx);
+  let sy = fy * fy * (3.0 - 2.0 * fy);
+  return
+    (n00 * (1.0 - sx) + n10 * sx) * (1.0 - sy) +
+    (n01 * (1.0 - sx) + n11 * sx) * sy;
+}
+
+fn fiberSample(
+  x: f32,
+  y: f32,
+  cosine: f32,
+  sine: f32,
+  along: f32,
+  across: f32,
+  seed: u32
+) -> f32 {
+  let xr = x * cosine + y * sine;
+  let yr = -x * sine + y * cosine;
+  return smoothNoiseAniso(xr, yr, along, across, seed) - 0.5;
+}
+
+fn grain2(x: f32, y: f32, rs: f32, seed: u32) -> f32 {
+  let a = smoothNoise(x, y, max(1.4 * rs, 1.0), seed) - 0.5;
+  let b = smoothNoise(x, y, max(0.7 * rs, 1.0), seed + 7u) - 0.5;
+  return a * 0.62 + b * 0.38;
+}
+
+fn speckField(x: f32, y: f32, rs: f32, seed: u32) -> f32 {
+  let cellSize = max(1.1 * rs, 1.0);
+  var speck = 0.0;
+  let dark = smoothNoise(x, y, cellSize, seed + 311u);
+  if (dark > 0.9) {
+    speck -= (dark - 0.9) / 0.1;
+  }
+  let light = smoothNoise(x, y, cellSize, seed + 913u);
+  if (light > 0.95) {
+    speck += ((light - 0.95) / 0.05) * 0.4;
+  }
+  return speck;
+}
+
+fn crinkle(x: f32, y: f32, rs: f32, seed: u32) -> f32 {
+  let noise = smoothNoiseAniso(x, y, 2.4 * rs, 8.0 * rs, seed + 55u);
+  return 1.0 - abs(2.0 * noise - 1.0) - 0.5;
+}
+
+fn paperTextureAt(x: f32, y: f32) -> vec2<f32> {
+  if (params.paperTexture == 0u) {
+    return vec2<f32>(0.0);
+  }
+
+  let rs = params.renderScale;
+  let seed = params.seed;
+  let cloud = smoothNoise(x, y, 50.0 * rs, seed + 1u) - 0.5;
+  let fineGrain = grain2(x, y, rs, seed);
+  let speck = speckField(x, y, rs, seed);
+  var lightness: f32;
+  var speckAmount: f32;
+
+  if (params.paperTexture == 2u) {
+    // fiber: [86, 94, 79] degrees. Constants are the f32 forms of the
+    // JavaScript Math.cos/Math.sin values used by the CPU helper.
+    let fiber = (
+      fiberSample(x, y,  0.069756474, 0.99756405, 13.0 * rs, 1.25 * rs, seed) +
+      fiberSample(x, y, -0.069756474, 0.99756405, 13.0 * rs, 1.25 * rs, seed + 23u) +
+      fiberSample(x, y,  0.19080900,  0.98162717, 13.0 * rs, 1.25 * rs, seed + 46u)
+    ) / 3.0;
+    lightness =
+      fiber * 1.0 + crinkle(x, y, rs, seed) * 0.6 +
+      fineGrain * 0.55 + cloud * 0.25;
+    speckAmount = 0.35;
+  } else {
+    // felt: [0, 90, 45, -40] degrees.
+    let fiber = (
+      fiberSample(x, y, 1.0,        0.0,        9.0 * rs, 2.2 * rs, seed) +
+      fiberSample(x, y, 0.0,        1.0,        9.0 * rs, 2.2 * rs, seed + 23u) +
+      fiberSample(x, y, 0.70710677,  0.70710677, 9.0 * rs, 2.2 * rs, seed + 46u) +
+      fiberSample(x, y, 0.76604444, -0.64278764, 9.0 * rs, 2.2 * rs, seed + 69u)
+    ) / 4.0;
+    lightness = fineGrain * 0.85 + fiber * 0.6 + cloud * 0.3;
+    speckAmount = 1.0;
+  }
+
+  lightness = sign(lightness) * pow(abs(lightness), 0.92);
+  lightness += speck * speckAmount;
+  return vec2<f32>(lightness, cloud * 0.5);
 }
 
 fn amCoverage(pixelX: u32, pixelY: u32, inkIndex: u32) -> f32 {
@@ -294,19 +499,69 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
   var alpha = 0.0;
 
   for (var inkIndex = 0u; inkIndex < params.inkCount; inkIndex++) {
-    var coverage = 0.0;
-    if (params.mode == 0u) {
-      coverage = amCoverage(pixelX, pixelY, inkIndex);
-    } else {
-      coverage = fmCoverage(pixelX, pixelY, inkIndex);
+    var offsetX = 0;
+    var offsetY = 0;
+    if (params.misregistration > 0.0) {
+      offsetX = jsRound(
+        (scuffHash(i32(inkIndex), 0, params.seed) - 0.5) *
+        2.0 * params.misregistration
+      );
+      offsetY = jsRound(
+        (scuffHash(i32(inkIndex), 1, params.seed) - 0.5) *
+        2.0 * params.misregistration
+      );
+    }
+    let sourceX = i32(pixelX) - offsetX;
+    let sourceY = i32(pixelY) - offsetY;
+    if (
+      sourceX < 0 || sourceX >= i32(params.width) ||
+      sourceY < 0 || sourceY >= i32(params.height)
+    ) {
+      continue;
     }
 
-    if (coverage < 0.004) {
+    var coverage = 0.0;
+    if (params.mode == 0u) {
+      coverage = amCoverage(u32(sourceX), u32(sourceY), inkIndex);
+    } else {
+      coverage = fmCoverage(u32(sourceX), u32(sourceY), inkIndex);
+    }
+
+    // The CPU mutates the complete halftone map before reading it through the
+    // registration offset, so scuff coordinates are the source coordinates.
+    if (params.noise > 0.0 && coverage >= 0.004) {
+      let baseSize = max(params.dotSize * 4.0, 8.0 * params.renderScale);
+      let size1 = baseSize * (1.0 + params.noise * 8.0);
+      let size2 = size1 * 3.0;
+      let size3 = size2 * 3.0;
+      let noiseSeed = inkIndex * 7919u + 31u;
+      let n =
+        smoothNoise(f32(sourceX), f32(sourceY), size1, noiseSeed) * 0.3 +
+        smoothNoise(f32(sourceX), f32(sourceY), size2, noiseSeed + 997u) * 0.4 +
+        smoothNoise(f32(sourceX), f32(sourceY), size3, noiseSeed + 2003u) * 0.3;
+      let deviation = (0.5 - n) * 2.0;
+      if (deviation > 0.0) {
+        coverage *= max(0.0, 1.0 - deviation * params.noise * 2.0);
+      }
+    }
+
+    var opacity = coverage;
+    if (params.grain > 0.0) {
+      opacity = clamp(
+        opacity +
+        (scuffHash(i32(pixelX), i32(pixelY), params.seed + 101u) - 0.5) *
+        params.grain,
+        0.0,
+        1.0
+      );
+    }
+
+    if (opacity < 0.004) {
       continue;
     }
 
     let ink = inks[inkIndex];
-    let a = coverage * params.inkOpacity;
+    let a = opacity * params.inkOpacity;
     let transmittanceR = 1.0 - a * (1.0 - ink.geometry.z / 255.0);
     let transmittanceG = 1.0 - a * (1.0 - ink.geometry.w / 255.0);
     let transmittanceB = 1.0 - a * (1.0 - ink.color.x / 255.0);
@@ -334,10 +589,23 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
     let inverseAlpha = 1.0 - alpha;
     let paperIsWhite =
       params.paperR == 255.0 && params.paperG == 255.0 && params.paperB == 255.0;
-    if (!paperIsWhite && inverseAlpha >= 0.004) {
-      red = f32(roundToByte(red + (params.paperR - 255.0) * inverseAlpha));
-      green = f32(roundToByte(green + (params.paperG - 255.0) * inverseAlpha));
-      blue = f32(roundToByte(blue + (params.paperB - 255.0) * inverseAlpha));
+    let textureOn = params.paperTexture != 0u && params.paperTextureAmount > 0.0;
+    if ((!paperIsWhite || textureOn) && inverseAlpha >= 0.004) {
+      var addR = (params.paperR - 255.0) * inverseAlpha;
+      var addG = (params.paperG - 255.0) * inverseAlpha;
+      var addB = (params.paperB - 255.0) * inverseAlpha;
+      if (textureOn) {
+        let texture = paperTextureAt(f32(pixelX), f32(pixelY));
+        let textureAmplitude = params.paperTextureAmount * 18.0;
+        let lightness = texture.x * textureAmplitude * inverseAlpha;
+        let warmth = texture.y * textureAmplitude * 0.4 * inverseAlpha;
+        addR += lightness + warmth;
+        addG += lightness;
+        addB += lightness - warmth;
+      }
+      red = f32(roundToByte(red + addR));
+      green = f32(roundToByte(green + addG));
+      blue = f32(roundToByte(blue + addB));
     }
   }
 
@@ -353,7 +621,7 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
 
   const paramsBuffer = device.createBuffer({
     label: "stencil parameters",
-    size: 64,
+    size: 96,
     usage: GPUBufferUsage.UNIFORM,
     mappedAtCreation: true,
   });
@@ -374,6 +642,18 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
   paramsView.setFloat32(52, paper.r, true);
   paramsView.setFloat32(56, paper.g, true);
   paramsView.setFloat32(60, paper.b, true);
+  paramsView.setFloat32(64, misregistration, true);
+  paramsView.setFloat32(68, grain, true);
+  paramsView.setFloat32(72, noise, true);
+  paramsView.setFloat32(76, renderScale, true);
+  paramsView.setUint32(80, seed, true);
+  paramsView.setUint32(
+    84,
+    paperTexture === "none" ? 0 : paperTexture === "felt" ? 1 : 2,
+    true
+  );
+  paramsView.setFloat32(88, paperTextureAmount, true);
+  paramsView.setUint32(92, 0, true);
   paramsBuffer.unmap();
 
   // WebGPU does not permit zero-sized buffers. One dummy element is enough
