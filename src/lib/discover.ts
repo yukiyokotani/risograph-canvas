@@ -32,6 +32,19 @@ export const DISCOVER_FIXED = {
 export const THUMB_RENDER_WIDTH = 240;
 export const PREVIEW_BASE_WIDTH = 600;
 
+/** 足切り用に先に描く「下見」レンダの幅（採点だけに使うので小さくてよい） */
+export const SCREEN_RENDER_WIDTH = 88;
+/**
+ * 候補の足切り基準（experiments/discover で検証した値）。
+ * distinction = 元画像で離れている画素ペアが描画でも離れているか（形・ディテールの保存度）。
+ * variation = 描画側の平均ペア距離（全体が一色に潰れていないか）。
+ * どちらも下回る候補は「何が写っているか分からない」ので Discover には出さない。
+ */
+export const MIN_DISTINCTION = 0.5;
+export const MIN_VARIATION = 8;
+/** 同じパレットをグリッドへ出す上限（点設定違いは許容しつつ、同じ配色で埋め尽くさない） */
+export const MAX_PER_PALETTE = 3;
+
 // --- 候補の型 ---
 export type DiscoverCategory = "curated" | "duo" | "tri" | "single" | "surprise";
 
@@ -197,7 +210,7 @@ function pickHarmony(
   const chosen: PoolInk[] = [];
   const exclude = new Set<string>();
   // 1色目: baseHue 付近（colorful ならソース支配色、mono なら任意）
-  let anchor = baseHue ?? rng() * 360;
+  const anchor = baseHue ?? rng() * 360;
   for (let i = 0; i < n; i++) {
     // n 色を色相環に均等配置した狙い角へ寄せる
     const target = anchor + (360 / n) * i;
@@ -218,16 +231,38 @@ function pickHarmony(
 const PAPER_CREAM = "#f5f0e8";
 const PAPER_DARK = "#1a1a1a";
 
+/**
+ * 見栄えに強く効く3つ（点サイズ・濃度・不透明度）は「見て違いが分かる刻み」の
+ * 離散値から選ぶ。連続値だと dotSize 3.5 と 3.0 のような差の分からない候補が量産され、
+ * グリッドが似たもので埋まってしまうため。
+ */
+const DOT_SIZES = [2, 3, 4, 5, 6];
+const DENSITIES = [0.9, 1.1, 1.3, 1.5];
+const OPACITIES = [0.65, 0.75, 0.85, 0.95];
+
 function randomParams(rng: () => number) {
-  // 見栄えに強く効く3つ（点サイズ・濃度・不透明度）は広めに振る。
-  const dotSize = roundTo(0.5, rangePick(rng, 2, 6));
-  const density = roundTo(0.05, rangePick(rng, 0.9, 1.5));
-  const inkOpacity = roundTo(0.02, rangePick(rng, 0.6, 0.95));
+  const dotSize = pick(rng, DOT_SIZES);
+  const density = pick(rng, DENSITIES);
+  const inkOpacity = pick(rng, OPACITIES);
   const misregistration = roundTo(0.5, rangePick(rng, 0, 2));
   // ハイライトのクリップは基本 0、たまに軽く効かせる
   const highlightCutoff = rng() < 0.7 ? 0 : roundTo(0.01, rangePick(rng, 0.03, 0.15));
   // paperTexture は固定（DISCOVER_FIXED）なのでここでは振らない
   return { dotSize, density, inkOpacity, misregistration, highlightCutoff, halftoneMode: "am" as const };
+}
+
+/** 同じパレット（＋紙・反転）かどうかの判定キー。同一パレットの出過ぎを抑えるのに使う。 */
+export function paletteKey(c: Candidate): string {
+  return c.colors.map((x) => x.color).sort().join(",") + "|" + c.paperColor + "|" + c.invert;
+}
+
+/**
+ * 「見た目が実質同じ」候補をまとめる署名。パレットに加えて、見栄えを左右する
+ * 点サイズ・濃度・不透明度まで含める（同じパレットでも点設定が違えば別候補として許容し、
+ * 点設定まで同じものだけを重複として弾く）。
+ */
+export function candidateSignature(c: Candidate): string {
+  return `${paletteKey(c)}|${c.dotSize}|${c.density}|${c.inkOpacity}`;
 }
 
 /** StencilColor（アプリの色）から対応する PoolInk を引く（色文字列で照合）。 */
@@ -279,10 +314,10 @@ export function generateCandidates(
   const nSingle = Math.round(count * mix.single);
   const nSurprise = count - nCurated - nDuo - nTri - nSingle;
 
-  // 定番: シャッフルして先頭から
+  // 定番: シャッフルして先頭から（1ページ内で同じ combo を使い回さない）
   const curatedShuffled = [...CURATED].sort(() => rng() - 0.5);
-  for (let i = 0; i < nCurated; i++) {
-    const c = curatedShuffled[i % curatedShuffled.length];
+  for (let i = 0; i < Math.min(nCurated, curatedShuffled.length); i++) {
+    const c = curatedShuffled[i];
     out.push(makeCandidate(rng, "curated", c.label, c.keys.map((k) => INKS[k])));
   }
   // デュオ（ハーモニー）
@@ -315,50 +350,65 @@ export function generateCandidates(
   return out;
 }
 
+/** SIMILAR strip 用の「base からの差」の格子（近い順）。重複なく系統的に振るのに使う。 */
+const NEAR_DOT = [0, -1, 1, -2, 2];
+const NEAR_DENSITY = [0, 0.2, -0.2];
+
 /**
- * 選択候補の「近傍」を生成。基本はパレット・紙・反転を保ったまま、点サイズ・濃度・
- * ハイライトクリップ・不透明度・版ずれを base 中心に軽く変調する。加えて一部は
- * 同系色への差し替え／色を1つ足す・引く、で色味を少しだけ動かす。
+ * 選択候補の「近傍」を生成。
+ *
+ * ランダムに振ると似た組み合わせが偶然固まって strip が重複だらけになるため、
+ * 点サイズ×濃度の差分を**重複のない格子**として順に割り当てる（base に近い順）。
+ * 3枚に1枚だけ色も少し動かし（同系色への差し替え／色を1つ足す・引く）、
+ * 残りはパレットを保ったまま点設定だけを見比べられるようにする。
+ * 紙・反転・版ずれ・ハイライトクリップは base のまま（差が分かりにくい軸を振らない）。
  */
 export function mutate(base: Candidate, seed: number, count = 24): Candidate[] {
   const rng = makeRng(seed);
   const label = (colors: StencilColor[]) =>
     colors.map((c) => c.name).join(" + ") + (base.invert ? " · black paper" : "");
+
+  const grid: [number, number][] = [];
+  for (const dDens of NEAR_DENSITY) {
+    for (const dDot of NEAR_DOT) {
+      if (dDot === 0 && dDens === 0) continue; // base そのものは strip 先頭に固定済み
+      grid.push([dDot, dDens]);
+    }
+  }
+
+  const pool = base.category === "surprise" ? FLUOR : VIVID;
   const out: Candidate[] = [];
   for (let i = 0; i < count; i++) {
-    // 見栄えに効く 点サイズ・濃度・不透明度 を base 中心に大きめに振る（変調の主役）
-    const dotSize = clamp(2, 6, roundTo(0.5, base.dotSize + rangePick(rng, -2, 2)));
-    const density = clamp(0.9, 1.5, roundTo(0.05, base.density + rangePick(rng, -0.3, 0.3)));
-    const inkOpacity = clamp(0.6, 0.95, roundTo(0.02, base.inkOpacity + rangePick(rng, -0.15, 0.15)));
-    const highlightCutoff =
-      rng() < 0.5 ? base.highlightCutoff : clamp(0, 0.25, roundTo(0.01, base.highlightCutoff + rangePick(rng, -0.05, 0.12)));
-    const misregistration = clamp(0, 2.5, roundTo(0.5, base.misregistration + rangePick(rng, -1, 1)));
+    const [dDot, dDens] = grid[i % grid.length];
+    const round = Math.floor(i / grid.length);
+    const dotSize = clamp(2, 6, base.dotSize + dDot);
+    const density = clamp(0.9, 1.5, roundTo(0.05, base.density + dDens));
+    // 格子を 2 周目以降に使うときは不透明度をずらして同じ見た目にならないようにする
+    const opacityShift = round === 0 ? 0 : round % 2 === 1 ? 0.1 : -0.1;
+    const inkOpacity = clamp(0.6, 0.95, roundTo(0.05, base.inkOpacity + opacityShift));
 
     let colors = base.colors;
-    const pool = base.category === "surprise" ? FLUOR : VIVID;
-    const roll = rng();
-    if (roll < 0.3 && base.colors.length >= 1) {
-      // 同系色: インク1つを「非常に近い色相」へ差し替え（hueDist < 40 のみ）
-      const idx = Math.floor(rng() * base.colors.length);
-      const cur = poolInkFromColor(base.colors[idx]);
-      const near = pool.filter(
-        (p) => p.color.color !== base.colors[idx].color && hueDist(p.hue, cur.hue) < 40,
-      );
-      if (near.length) {
-        const repl = near[Math.floor(rng() * near.length)];
-        colors = base.colors.map((c, j) => (j === idx ? repl.color : c));
+    if (i % 3 === 2) {
+      // 色も少しだけ動かす（同系色への差し替え → 足す/引く を交互に）
+      if (i % 6 === 2 && base.colors.length >= 1) {
+        const idx = Math.floor(rng() * base.colors.length);
+        const cur = poolInkFromColor(base.colors[idx]);
+        const near = pool.filter(
+          (p) => p.color.color !== base.colors[idx].color && hueDist(p.hue, cur.hue) < 40,
+        );
+        if (near.length) {
+          const repl = near[Math.floor(rng() * near.length)];
+          colors = base.colors.map((c, j) => (j === idx ? repl.color : c));
+        }
+      } else if (base.colors.length >= 2 && rng() < 0.5) {
+        const drop = Math.floor(rng() * base.colors.length);
+        colors = base.colors.filter((_, j) => j !== drop);
+      } else if (base.colors.length < 3) {
+        const used = new Set(base.colors.map((c) => c.color));
+        const avail = pool.filter((p) => !used.has(p.color.color));
+        if (avail.length) colors = [...base.colors, avail[Math.floor(rng() * avail.length)].color];
       }
-    } else if (roll < 0.45 && base.colors.length >= 2) {
-      // 色を1つ引く
-      const drop = Math.floor(rng() * base.colors.length);
-      colors = base.colors.filter((_, j) => j !== drop);
-    } else if (roll < 0.6 && base.colors.length < 3) {
-      // 色を1つ足す（既存と重複しないもの）
-      const used = new Set(base.colors.map((c) => c.color));
-      const avail = pool.filter((p) => !used.has(p.color.color));
-      if (avail.length) colors = [...base.colors, avail[Math.floor(rng() * avail.length)].color];
     }
-    // それ以外はパレット完全維持（点設定だけの変調）
 
     out.push({
       ...base,
@@ -367,9 +417,7 @@ export function mutate(base: Candidate, seed: number, count = 24): Candidate[] {
       colors,
       dotSize,
       density,
-      highlightCutoff,
       inkOpacity,
-      misregistration,
     });
   }
   return out;

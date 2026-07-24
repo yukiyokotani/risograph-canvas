@@ -13,14 +13,21 @@ import {
   analyzeSource,
   generateCandidates,
   mutate,
+  scoreRender,
+  candidateSignature,
+  paletteKey,
   DISCOVER_FIXED,
   THUMB_RENDER_WIDTH,
   PREVIEW_BASE_WIDTH,
+  SCREEN_RENDER_WIDTH,
+  MIN_DISTINCTION,
+  MIN_VARIATION,
+  MAX_PER_PALETTE,
   type Candidate,
   type SourceStats,
 } from "../lib/discover";
 
-const PAGE = 48; // スクロールで継ぎ足す1ページの候補数（params のみなので軽い）
+const PAGE = 48; // 1 回の補充で生成する候補数（この中から重複と潰れを落として採用する）
 const MAX_ITEMS = 240; // 実質的なバリエーションは有限なので、この辺りで打ち切る
 const OVERSCAN_ROWS = 2;
 const CACHE_CAP = 200; // 描画済みサムネの LRU 上限（表示範囲外は解放）
@@ -123,8 +130,17 @@ function SelectionMark() {
 
 export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: DiscoverDialogProps) {
   const sourceRef = useRef<ImageDataLike | null>(null);
+  // 足切り用の小さいソース（下見レンダの採点に使う）
+  const screenSrcRef = useRef<ImageDataLike | null>(null);
   const statsRef = useRef<SourceStats | null>(null);
   const pageRef = useRef(0);
+  // 補充の重複排除: 見た目が実質同じ署名と、パレットごとの採用数
+  const seenSigRef = useRef<Set<string>>(new Set());
+  const paletteCountRef = useRef<Map<string, number>>(new Map());
+  const producingRef = useRef(false);
+  const candCountRef = useRef(0);
+  // 補充の世代。ダイアログを開き直す/画像が変わると進めて、実行中の補充を捨てる。
+  const runRef = useRef(0);
   const cacheRef = useRef<Map<string, Rendered>>(new Map());
   const visRunRef = useRef(0);
   const simRunRef = useRef(0);
@@ -181,6 +197,63 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
     return run;
   }, []);
 
+  /**
+   * 候補を補充する。生成しただけでは
+   *   1. 同じ配色・同じ点設定の「実質同じ」候補が何度も出てくる
+   *   2. ディテールが潰れて何が写っているか分からない候補が混じる
+   * ので、(1) 署名とパレット上限で間引き、(2) 小さく下見レンダして採点し、
+   * 基準を満たしたものだけをグリッドへ積む。
+   */
+  const produce = useCallback(async (want: number) => {
+    if (producingRef.current) return;
+    const stats = statsRef.current;
+    const screenSrc = screenSrcRef.current;
+    if (!stats || !screenSrc) return;
+    producingRef.current = true;
+    const myRun = runRef.current;
+    try {
+      let added = 0;
+      // 生成→間引き→採点を、必要数が埋まるまで数回まわす（無限ループ防止に上限つき）
+      for (let round = 0; round < 8 && added < want; round++) {
+        if (myRun !== runRef.current) return;
+        if (candCountRef.current + added >= MAX_ITEMS) return;
+        const fresh: Candidate[] = [];
+        for (const cand of generateCandidates(stats, ++pageRef.current, PAGE)) {
+          const sig = candidateSignature(cand);
+          if (seenSigRef.current.has(sig)) continue; // 実質同じものは出さない
+          const pal = paletteKey(cand);
+          const used = paletteCountRef.current.get(pal) ?? 0;
+          if (used >= MAX_PER_PALETTE) continue; // 同じ配色で埋め尽くさない
+          seenSigRef.current.add(sig);
+          paletteCountRef.current.set(pal, used + 1);
+          fresh.push(cand);
+        }
+        const keep: Candidate[] = [];
+        for (const cand of fresh) {
+          if (myRun !== runRef.current) return;
+          if (candCountRef.current + keep.length >= MAX_ITEMS) break;
+          let pixels: Uint8ClampedArray;
+          try {
+            pixels = await renderStencilPixels(screenSrc, buildOptions(cand, screenSrc.width));
+          } catch {
+            continue;
+          }
+          if (myRun !== runRef.current) return;
+          const s = scoreRender(screenSrc.data, pixels, screenSrc.width, screenSrc.height);
+          if (s.distinction < MIN_DISTINCTION || s.variation < MIN_VARIATION) continue;
+          keep.push(cand);
+        }
+        if (keep.length) {
+          added += keep.length;
+          candCountRef.current += keep.length;
+          setCandidates((prev) => [...prev, ...keep]);
+        }
+      }
+    } finally {
+      producingRef.current = false;
+    }
+  }, []);
+
   // --- レイアウト計算（仮想化） ---
   const cols = viewport.w ? colsForWidth(viewport.w) : 3;
   const tile = viewport.w ? viewport.w / cols : 0;
@@ -203,7 +276,7 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
       }
     }
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [candidates, startRow, endRow, cols, tile]);
   const visibleKey = visible.map((v) => v.cand.id).join(",");
 
@@ -234,30 +307,25 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleKey]);
 
-  // 末尾が近づいたら次ページを継ぎ足す（上限 MAX_ITEMS で打ち切り）。
+  // 末尾が近づいたら補充する（重複排除と足切りは produce の中）。
   useEffect(() => {
     if (!statsRef.current || !viewport.w || !tile) return;
     if (candidates.length >= MAX_ITEMS) return;
     const needRow = Math.ceil((scrollTop + viewport.h) / tile) + OVERSCAN_ROWS + 2;
     if (rowCount < needRow) {
-      const room = MAX_ITEMS - candidates.length;
-      const want = Math.min(room, (needRow - rowCount) * cols + PAGE);
-      const add: Candidate[] = [];
-      while (add.length < want) {
-        add.push(...generateCandidates(statsRef.current, pageRef.current + 1, PAGE));
-        pageRef.current++;
-      }
-      setCandidates((prev) => [...prev, ...add.slice(0, room)]);
+      produce(Math.max(cols * 2, (needRow - rowCount) * cols));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scrollTop, viewport.w, viewport.h, tile, rowCount, cols, candidates.length]);
+     
+  }, [scrollTop, viewport.w, viewport.h, tile, rowCount, cols, candidates.length, produce]);
 
   // 開いたら（画像が変わったら）ソースを読み、初期候補を生成。閉じたら破棄。
   useEffect(() => {
     if (!open) {
+      runRef.current++;
       visRunRef.current++;
       simRunRef.current++;
       cacheRef.current.clear();
+      candCountRef.current = 0;
       setCandidates([]);
       setSelectedId(null);
       setSimilar([]);
@@ -274,17 +342,24 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
         const id = getImageData(img, w, h);
         sourceRef.current = { data: id.data, width: w, height: h };
         statsRef.current = analyzeSource(id.data, w, h);
+        // 足切り採点用の小さいソース
+        const sw = SCREEN_RENDER_WIDTH;
+        const sh = Math.max(1, Math.round((img.naturalHeight / img.naturalWidth) * sw));
+        const sid = getImageData(img, sw, sh);
+        screenSrcRef.current = { data: sid.data, width: sw, height: sh };
         cacheRef.current.clear();
-        pageRef.current = 2;
+        runRef.current++;
+        pageRef.current = 0;
+        seenSigRef.current = new Set();
+        paletteCountRef.current = new Map();
+        candCountRef.current = 0;
         setSelectedId(null);
         setSimilar([]);
         setSimilarSelectedId(null);
         setScrollTop(0);
         if (scrollElRef.current) scrollElRef.current.scrollTop = 0;
-        setCandidates([
-          ...generateCandidates(statsRef.current, 1, PAGE),
-          ...generateCandidates(statsRef.current, 2, PAGE),
-        ]);
+        setCandidates([]);
+        produce(PAGE);
       })
       .catch(() => {});
     return () => {
@@ -328,15 +403,23 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
       if (myRun !== simRunRef.current) return;
       const strip: Rendered[] = baseR ? [baseR] : [];
       setSimilar([...strip]);
-      const variations = mutate(cand, simSeedRef.current++, SIMILAR_COUNT);
+      // 近傍は多めに作り、潰れたものと重複を落としながら SIMILAR_COUNT 枚まで並べる。
+      const seen = new Set<string>([candidateSignature(cand)]);
+      const variations = mutate(cand, simSeedRef.current++, SIMILAR_COUNT * 2);
       for (const v of variations) {
+        if (strip.length > SIMILAR_COUNT) break;
+        const sig = candidateSignature(v);
+        if (seen.has(sig)) continue;
+        seen.add(sig);
         if (myRun !== simRunRef.current) return;
         const r = await queueRender(v, () => myRun === simRunRef.current);
         if (myRun !== simRunRef.current) return;
-        if (r) {
-          strip.push(r);
-          setSimilar([...strip]);
-        }
+        if (!r) continue;
+        // 表示用に描いたサムネをそのまま採点し、ディテールが潰れたものは並べない
+        const s = scoreRender(src.data, r.pixels, src.width, src.height);
+        if (s.distinction < MIN_DISTINCTION || s.variation < MIN_VARIATION) continue;
+        strip.push(r);
+        setSimilar([...strip]);
       }
       if (myRun !== simRunRef.current) return;
       setSimilarLoading(false);
