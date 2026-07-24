@@ -536,6 +536,81 @@ function applySnapSeparation(
 }
 
 /**
+ * 2色 × Natural 専用の色分解。加法 NNLS の代わりに、実際の乗算（減法）フォワード
+ * モデルへ直接フィットする。分解と描画が同じモデルになるので、ガモット外の色でも
+ * 単色化（snap）せず連続的なブレンドで最近色へ収束する（＝ハードな境界が出ない）。
+ * 影は両インクの重ね（overprint）へ自然に向かい、二色の階調をフルに使う。
+ *
+ *   F_c(d) = Π_i(1 − o·d_i·s_ic) + (P_c − 1)·Π_i(1 − o·d_i)   （合成器と同じ順モデル）
+ *
+ * は各密度についてアフィンなので、各座標の最小二乗解は閉形式。輝度重み付き RGB 距離
+ * （超越関数なし＝軽量・CPU/GPU で素直に一致）を使い、NNLS 結果を初期値に数回スイープする。
+ */
+function applyTwoInkNaturalFit(
+  densityMaps: Float32Array[],
+  decompIndex: number[],
+  source: ImageDataLike,
+  paper: RGB,
+  inkRgbs: RGB[],
+  inkOpacity: number
+): void {
+  const i0 = decompIndex[0];
+  const i1 = decompIndex[1];
+  const o = inkOpacity;
+  const s0: [number, number, number] = [1 - inkRgbs[i0].r / 255, 1 - inkRgbs[i0].g / 255, 1 - inkRgbs[i0].b / 255];
+  const s1: [number, number, number] = [1 - inkRgbs[i1].r / 255, 1 - inkRgbs[i1].g / 255, 1 - inkRgbs[i1].b / 255];
+  const P: [number, number, number] = [paper.r / 255, paper.g / 255, paper.b / 255];
+  const Y: [number, number, number] = [0.2126, 0.7152, 0.0722];
+  const LAMBDA = 3; // 明度（トーン）を優先する重み
+
+  // ink A の密度を、もう片方 (dB, sB) を固定して閉形式で更新する。
+  const coord = (
+    sA: [number, number, number],
+    sB: [number, number, number],
+    dB: number,
+    T: [number, number, number]
+  ): number => {
+    let BB = 0, Be0 = 0, yB = 0, ye0 = 0;
+    for (let c = 0; c < 3; c++) {
+      const Rc = 1 - o * dB * sB[c];
+      const U = 1 - o * dB;
+      const Ac = Rc + (P[c] - 1) * U;
+      const Bc = -o * (sA[c] * Rc + (P[c] - 1) * U);
+      const e0 = Ac - T[c];
+      BB += Bc * Bc; Be0 += Bc * e0; yB += Y[c] * Bc; ye0 += Y[c] * e0;
+    }
+    const denom = BB + LAMBDA * yB * yB;
+    if (denom <= 1e-9) return 0;
+    const d = -(Be0 + LAMBDA * yB * ye0) / denom;
+    return d < 0 ? 0 : d > 1 ? 1 : d;
+  };
+
+  const map0 = densityMaps[i0];
+  const map1 = densityMaps[i1];
+  const data = source.data;
+  const pixelCount = source.width * source.height;
+  const T: [number, number, number] = [0, 0, 0];
+  for (let p = 0; p < pixelCount; p++) {
+    const off = p * 4;
+    const alpha = data[off + 3] / 255;
+    if (alpha < 0.01) { map0[p] = 0; map1[p] = 0; continue; }
+    // 順モデルと整合する目標色: T = (1−α)·紙 + α·元色
+    T[0] = (1 - alpha) * P[0] + (alpha * data[off]) / 255;
+    T[1] = (1 - alpha) * P[1] + (alpha * data[off + 1]) / 255;
+    T[2] = (1 - alpha) * P[2] + (alpha * data[off + 2]) / 255;
+    // NNLS 結果を初期値に座標降下（各座標は閉形式・6 スイープ）
+    let d0 = map0[p];
+    let d1 = map1[p];
+    for (let sweep = 0; sweep < 6; sweep++) {
+      d0 = coord(s0, s1, d1, T);
+      d1 = coord(s1, s0, d0, T);
+    }
+    map0[p] = d0;
+    map1[p] = d1;
+  }
+}
+
+/**
  * Bold モードのシグモイドコントラスト。密度の中間調を減らして 0/1 寄りにし、
  * 版ごとのメリハリ（グラフィックな締まり）を強める。単色分離は
  * {@link applySnapSeparation} が担い、ここは明暗コントラストのみを受け持つ。
@@ -747,7 +822,11 @@ export function computeStencil(
   // 色分解の後処理: ガモット外の彩度高色を「混色の濁り」ではなく支配的インク単色へ
   // 寄せて明度・彩度を保つ（緑→澄んだ青 等）。Natural でも濁りを除去し、Bold はより
   // 積極的に分離する。Bold の分離強度は gamutThreshold（0-1）で調整できる。
-  if (decompIndexMap.length >= 2) {
+  if (colorMode !== "bold" && inkRgbs.length === 2 && decompIndexMap.length === 2) {
+    // 2色 × Natural: 加法 NNLS の代わりに乗算モデルへ直接フィット（snap 不要・連続）。
+    // Bold・3色以上・GCR 構成には触れない（従来の snap を使う）。
+    applyTwoInkNaturalFit(densityMaps, decompIndexMap, source, paper, inkRgbs, inkOpacity);
+  } else if (decompIndexMap.length >= 2) {
     const strength = colorMode === "bold" ? 0.5 + gamutThreshold : 0;
     applySnapSeparation(
       densityMaps, decompIndexMap, residuals, source, paper, inkRgbs, inkOpacity, strength
