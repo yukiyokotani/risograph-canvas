@@ -9,11 +9,11 @@ export const INKS = {
   blue: { name: "Blue", color: "#0078BF" },
   green: { name: "Green", color: "#00A95C" },
   mediumBlue: { name: "Medium Blue", color: "#3255A4" },
-  brightRed: { name: "Bright Red", color: "#F15060" },
+  brightRed: { name: "Bright Red", color: "#E93A28" },
   federalBlue: { name: "Federal Blue", color: "#3D5588" },
   purple: { name: "Purple", color: "#765BA7" },
   teal: { name: "Teal", color: "#00838A" },
-  gold: { name: "Gold", color: "#CFB53B" },
+  gold: { name: "Gold", color: "#96793F" },
   silver: { name: "Silver", color: "#C0C0C0" },
   bronze: { name: "Bronze", color: "#CD7F32" },
   flatGold: { name: "Flat Gold", color: "#BB8B41" },
@@ -21,8 +21,8 @@ export const INKS = {
   red: { name: "Red", color: "#FF665E" },
   orange: { name: "Orange", color: "#FF6C2F" },
   yellow: { name: "Yellow", color: "#FFE800" },
-  fluorescentPink: { name: "Fluorescent Pink", color: "#F13792" },
-  fluorescentOrange: { name: "Fluorescent Orange", color: "#FF7477" },
+  fluorescentPink: { name: "Fluorescent Pink", color: "#F0409A" },
+  fluorescentOrange: { name: "Fluorescent Orange", color: "#FF6450" },
   cornflower: { name: "Cornflower", color: "#62A8E5" },
   skyBlue: { name: "Sky Blue", color: "#4982CF" },
   seaBlue: { name: "Sea Blue", color: "#0074A2" },
@@ -73,9 +73,9 @@ export const INKS = {
   salmon: { name: "Salmon", color: "#FF8F8F" },
   lightTeal: { name: "Light Teal", color: "#009DA5" },
   warmRed: { name: "Warm Red", color: "#FF4C65" },
-  fluorescentGreen: { name: "Fl. Green", color: "#44D62C" },
-  fluorescentBlue: { name: "Fl. Blue", color: "#3D95D4" },
-  fluorescentYellow: { name: "Fl. Yellow", color: "#E6EF52" },
+  fluorescentGreen: { name: "Fl. Green", color: "#5AD46A" },
+  fluorescentBlue: { name: "Fl. Blue", color: "#2FA5DE" },
+  fluorescentYellow: { name: "Fl. Yellow", color: "#DBEE2E" },
 } as const satisfies Record<string, StencilColor>;
 
 /** 代表的な色の組み合わせプリセット */
@@ -87,10 +87,6 @@ export const PRESETS = {
   retro: {
     name: "Retro (Teal + Orange)",
     colors: [INKS.teal, INKS.orange],
-  },
-  neon: {
-    name: "Neon (Fl. Pink + Fl. Green)",
-    colors: [INKS.fluorescentPink, INKS.fluorescentGreen],
   },
   tricolor: {
     name: "Tricolor (Blue + Red + Yellow)",
@@ -133,6 +129,26 @@ export const PRESETS = {
   grayPink: {
     name: "Gray + Fl. Pink",
     colors: [INKS.lightGray, INKS.fluorescentPink],
+  },
+  fluorGreenBlue: {
+    name: "Fl. Green + Fl. Blue",
+    colors: [INKS.fluorescentGreen, INKS.fluorescentBlue],
+  },
+  fluorGreenYellow: {
+    name: "Fl. Green + Fl. Yellow",
+    colors: [INKS.fluorescentGreen, INKS.fluorescentYellow],
+  },
+  fluorPinkBlue: {
+    name: "Fl. Pink + Fl. Blue",
+    colors: [INKS.fluorescentPink, INKS.fluorescentBlue],
+  },
+  fluorPinkGreen: {
+    name: "Fl. Pink + Fl. Green",
+    colors: [INKS.fluorescentPink, INKS.fluorescentGreen],
+  },
+  fluorPinkYellow: {
+    name: "Fl. Pink + Fl. Yellow",
+    colors: [INKS.fluorescentPink, INKS.fluorescentYellow],
   },
 } as const satisfies Record<
   string,
