@@ -3,6 +3,7 @@
 import { hexToRgb, luminance, rgbToLab, type RGB } from "./color";
 import {
   buildLightnessTable,
+  twoInkToneRange,
   type ImageDataLike,
   type InkDensities,
   type StencilOptions,
@@ -50,6 +51,12 @@ struct Params {
   paperG: f32,
   paperB: f32,
   contrastAmount: f32,
+
+  // 2色フィットのインク量上限とトーン範囲（CPU の twoInkToneRange と同じ値）
+  twoInkTac: f32,
+  twoInkFloor: f32,
+  twoInkKnee: f32,
+  twoInkShoulderTop: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -146,9 +153,12 @@ fn coverageForLightness(inkIndex: u32, targetL: f32) -> f32 {
 
 // 2色 Natural フィットの1座標更新（CPU applyTwoInkNaturalFit と同一）。
 // 順モデル F は片方の密度に対しアフィンなので、輝度重み付き RGB 距離の最小解は閉形式。
-fn twoInkCoord(sA: vec3<f32>, sB: vec3<f32>, dB: f32, tgt: vec3<f32>, o: f32, pp: vec3<f32>) -> f32 {
+// hi は総インク量上限による上限、lam は明度（トーン）重み。
+fn twoInkCoord(
+  sA: vec3<f32>, sB: vec3<f32>, dB: f32, tgt: vec3<f32>,
+  o: f32, pp: vec3<f32>, hi: f32, lam: f32
+) -> f32 {
   let Y = vec3<f32>(0.2126, 0.7152, 0.0722);
-  let LAMBDA = 3.0;
   var BB = 0.0;
   var Be0 = 0.0;
   var yB = 0.0;
@@ -164,12 +174,32 @@ fn twoInkCoord(sA: vec3<f32>, sB: vec3<f32>, dB: f32, tgt: vec3<f32>, o: f32, pp
     yB += Y[c] * Bc;
     ye0 += Y[c] * e0;
   }
-  let denom = BB + LAMBDA * yB * yB;
+  let denom = BB + lam * yB * yB;
   if (denom <= 1e-9) {
     return 0.0;
   }
-  let d = -(Be0 + LAMBDA * yB * ye0) / denom;
-  return clamp(d, 0.0, 1.0);
+  let d = -(Be0 + lam * yB * ye0) / denom;
+  return clamp(d, 0.0, hi);
+}
+
+// 順モデル F_c(d0,d1)（合成器・CPU と同一）
+fn twoInkForward(d0: f32, d1: f32, sA: vec3<f32>, sB: vec3<f32>, o: f32, pp: vec3<f32>) -> vec3<f32> {
+  let u = (1.0 - o * d0) * (1.0 - o * d1);
+  var r = vec3<f32>(0.0);
+  for (var c = 0u; c < 3u; c++) {
+    r[c] = (1.0 - o * d0 * sA[c]) * (1.0 - o * d1 * sB[c]) + (pp[c] - 1.0) * u;
+  }
+  return r;
+}
+
+// 目的関数（輝度重み付き RGB 距離）。インク量上限線上の1次元探索に使う。
+fn twoInkObjective(
+  d0: f32, d1: f32, sA: vec3<f32>, sB: vec3<f32>,
+  o: f32, pp: vec3<f32>, tgt: vec3<f32>, lam: f32
+) -> f32 {
+  let Y = vec3<f32>(0.2126, 0.7152, 0.0722);
+  let e = twoInkForward(d0, d1, sA, sB, o, pp) - tgt;
+  return dot(e, e) + lam * pow(dot(Y, e), 2.0);
 }
 
 @compute @workgroup_size(8, 8)
@@ -299,12 +329,65 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
       (1.0 - alpha) * pp.y + alpha * green / 255.0,
       (1.0 - alpha) * pp.z + alpha * blue / 255.0
     );
+    let Yw = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let tac = params.twoInkTac;
+    let toneFloor = params.twoInkFloor;
+    let toneKnee = params.twoInkKnee;
+    let shoulderTop = params.twoInkShoulderTop;
+    let paperTone = dot(Yw, pp);
+
+    // 影のトーン持ち上げ（CPU と同一）: y' = y + floor·(1 − y/K)²
+    var tgtAdj = tt;
+    let yt = dot(Yw, tt);
+    if (yt < shoulderTop) {
+      let u = 1.0 - yt / shoulderTop;
+      let lifted = yt + toneFloor * u * u;
+      let den = paperTone - yt;
+      if (den > 1e-4) {
+        let s = clamp((lifted - yt) / den, 0.0, 1.0);
+        tgtAdj = tt + s * (pp - tt);
+      }
+    }
+
+    // 影ほど明度優先（CPU と同一）
+    let shadowness = clamp((toneKnee - yt) / max(1e-4, toneKnee - toneFloor), 0.0, 1.0);
+    let lam = 3.0 + (30.0 - 3.0) * shadowness;
+
     var d0 = densities[inkMeta[0u]];
     var d1 = densities[inkMeta[1u]];
-    for (var sweep = 0u; sweep < 6u; sweep++) {
-      d0 = twoInkCoord(sa, sb, d1, tt, o, pp);
-      d1 = twoInkCoord(sb, sa, d0, tt, o, pp);
+    if (d0 + d1 > tac) {
+      let k = tac / (d0 + d1);
+      d0 = d0 * k;
+      d1 = d1 * k;
     }
+    for (var sweep = 0u; sweep < 6u; sweep++) {
+      d0 = twoInkCoord(sa, sb, d1, tgtAdj, o, pp, min(1.0, tac - d1), lam);
+      d1 = twoInkCoord(sb, sa, d0, tgtAdj, o, pp, min(1.0, tac - d0), lam);
+    }
+
+    // 上限に張り付いた場合は上限線上を1次元探索（座標降下は線に沿って動けない）
+    if (d0 + d1 > tac - 1e-4) {
+      let tLo = max(0.0, tac - 1.0);
+      let tHi = min(1.0, tac);
+      var bestT = d0;
+      var bestE = 1e30;
+      for (var i = 0u; i <= 24u; i++) {
+        let t = tLo + (tHi - tLo) * f32(i) / 24.0;
+        let e = twoInkObjective(t, tac - t, sa, sb, o, pp, tgtAdj, lam);
+        if (e < bestE) { bestE = e; bestT = t; }
+      }
+      let step = (tHi - tLo) / 24.0;
+      let lo = max(tLo, bestT - step);
+      let hi = min(tHi, bestT + step);
+      for (var i = 0u; i <= 8u; i++) {
+        let t = lo + (hi - lo) * f32(i) / 8.0;
+        let e = twoInkObjective(t, tac - t, sa, sb, o, pp, tgtAdj, lam);
+        if (e < bestE) { bestE = e; bestT = t; }
+      }
+      d0 = bestT;
+      d1 = tac - bestT;
+    }
+
     densities[inkMeta[0u]] = d0;
     densities[inkMeta[1u]] = d1;
   }
@@ -642,7 +725,7 @@ export async function decomposeToGpuBuffer(
 
   const paramsBuffer = device.createBuffer({
     label: "stencil decomposition parameters",
-    size: 96,
+    size: 112,
     usage: GPUBufferUsage.UNIFORM,
     mappedAtCreation: true,
   });
@@ -675,6 +758,16 @@ export async function decomposeToGpuBuffer(
   params.setFloat32(84, paper.g, true);
   params.setFloat32(88, paper.b, true);
   params.setFloat32(92, separation, true);
+  // 2色フィットのインク量上限・トーン範囲（CPU と同じ導出を共有する）
+  const toneRange = twoInkFit
+    ? twoInkToneRange(
+        inkRgbs[decompIndexMap[0]], inkRgbs[decompIndexMap[1]], paper, inkOpacity
+      )
+    : { tac: 2, floor: 0, knee: 1, shoulderTop: 1 };
+  params.setFloat32(96, toneRange.tac, true);
+  params.setFloat32(100, toneRange.floor, true);
+  params.setFloat32(104, toneRange.knee, true);
+  params.setFloat32(108, toneRange.shoulderTop, true);
   paramsBuffer.unmap();
 
   const toneBuffer = device.createBuffer({

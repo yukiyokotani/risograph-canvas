@@ -581,15 +581,108 @@ function applySnapSeparation(
 }
 
 /**
+ * 2色刷りの総インク量上限（d0 + d1）。
+ *
+ * 実際のリソグラフでも 2 版をベタで重ねると紙が完全に埋まり、色が沈んで濁る
+ * （＋乾かない・裏移りする）ため、総インク量には上限を設けるのが定石。上限を
+ * 設けることで最暗部でも網点の隙間に紙が残り、紙色が「3 色目」として発色に
+ * 参加する。2.0（＝両版ベタ）に対し 1.7 は紙の見え面積が約 3 倍になる。
+ */
+const TWO_INK_TAC = 1.7;
+
+/** Y 重み（順モデルと同じ非線形 RGB 上で使う簡易トーン） */
+const TONE_Y: [number, number, number] = [0.2126, 0.7152, 0.0722];
+
+/** 影で明度優先に切り替える際の最大重み（{@link applyTwoInkNaturalFit} 参照） */
+const TWO_INK_LAMBDA_SHADOW = 30;
+/** 通常域のトーン重み */
+const TWO_INK_LAMBDA = 3;
+
+/** 2色フィットのトーン範囲（紙・単色・重ね刷りの位置関係） */
+export interface TwoInkToneRange {
+  /** 総インク量上限 */
+  tac: number;
+  /** 上限内で到達できる最も暗いトーン（＝影の底） */
+  floor: number;
+  /** 単色 1 版で到達できる最も暗いトーン（これ以下は必ず 2 版重ね＝濁る領域） */
+  knee: number;
+  /** 影の持ち上げカーブの上端（ここより明るいトーンは素通し） */
+  shoulderTop: number;
+}
+
+/** 順モデル F_c(d0,d1)（合成器と同一）の 1 チャンネル */
+function twoInkForward(
+  d0: number, d1: number, c: number,
+  s0: [number, number, number], s1: [number, number, number],
+  P: [number, number, number], o: number
+): number {
+  const prod = (1 - o * d0 * s0[c]) * (1 - o * d1 * s1[c]);
+  const u = (1 - o * d0) * (1 - o * d1);
+  return prod + (P[c] - 1) * u;
+}
+
+/**
+ * 2色構成のトーン範囲を求める。
+ *
+ * knee は「単色 1 版だけで出せる最も暗いトーン」。リソのインクは 1 版ベタでも
+ * さほど暗くならない（多くの色で tone ≈ 0.45〜0.55）ので、これより暗い色は
+ * 必ず 2 版の重ねになる＝紙が埋まって濁る領域になる。floor はインク量上限の
+ * 下で到達できる最暗トーン。この 2 つで「濁る帯」を特定し、そこだけを
+ * 圧縮して階調を残す（{@link applyTwoInkNaturalFit}）。
+ */
+export function twoInkToneRange(
+  ink0: RGB, ink1: RGB, paper: RGB, o: number, tac = TWO_INK_TAC
+): TwoInkToneRange {
+  const s0: [number, number, number] = [1 - ink0.r / 255, 1 - ink0.g / 255, 1 - ink0.b / 255];
+  const s1: [number, number, number] = [1 - ink1.r / 255, 1 - ink1.g / 255, 1 - ink1.b / 255];
+  const P: [number, number, number] = [paper.r / 255, paper.g / 255, paper.b / 255];
+  const toneAt = (d0: number, d1: number): number =>
+    TONE_Y[0] * twoInkForward(d0, d1, 0, s0, s1, P, o) +
+    TONE_Y[1] * twoInkForward(d0, d1, 1, s0, s1, P, o) +
+    TONE_Y[2] * twoInkForward(d0, d1, 2, s0, s1, P, o);
+
+  // 上限線 d0+d1 = tac 上を走査して最暗トーンを取る（角 (1,1) は tac<2 なら除外される）
+  let floor = Infinity;
+  const STEPS = 64;
+  for (let i = 0; i <= STEPS; i++) {
+    const d0 = Math.min(1, tac) * (i / STEPS);
+    const d1 = Math.min(1, tac - d0);
+    if (d1 < 0) continue;
+    floor = Math.min(floor, toneAt(d0, d1));
+  }
+  const rawKnee = Math.min(toneAt(1, 0), toneAt(0, 1));
+  const paperTone = toneAt(0, 0);
+  // 圧縮帯が潰れない/広がりすぎないように挟む
+  const knee = Math.max(floor + 0.05, Math.min(rawKnee, paperTone - 0.05));
+  // 持ち上げカーブ y + floor·(1−y/K)² が単調になるには K > 2·floor が必要。
+  // 十分な余裕（3·floor）を取りつつ、紙のトーン付近には掛からないよう上を抑える。
+  const shoulderTop = Math.max(
+    2.2 * floor,
+    Math.min(paperTone * 0.95, Math.max(3 * floor, knee))
+  );
+  return { tac, floor, knee, shoulderTop };
+}
+
+/**
  * 2色 × Natural 専用の色分解。加法 NNLS の代わりに、実際の乗算（減法）フォワード
  * モデルへ直接フィットする。分解と描画が同じモデルになるので、ガモット外の色でも
  * 単色化（snap）せず連続的なブレンドで最近色へ収束する（＝ハードな境界が出ない）。
- * 影は両インクの重ね（overprint）へ自然に向かい、二色の階調をフルに使う。
  *
  *   F_c(d) = Π_i(1 − o·d_i·s_ic) + (P_c − 1)·Π_i(1 − o·d_i)   （合成器と同じ順モデル）
  *
  * は各密度についてアフィンなので、各座標の最小二乗解は閉形式。輝度重み付き RGB 距離
  * （超越関数なし＝軽量・CPU/GPU で素直に一致）を使い、NNLS 結果を初期値に数回スイープする。
+ *
+ * さらに「紙を 3 色目として使う」ための 2 段構えを入れている:
+ *
+ * 1. 総インク量上限（{@link TWO_INK_TAC}）。無制限だと暗い色はすべて両版ベタの角
+ *    (1,1) に張り付き、紙が完全に埋まって濁った暗色になる。上限内に収めることで
+ *    最暗部にも紙が残り、紙色が発色に参加する。
+ * 2. 影のトーン圧縮。上限の有無にかかわらず、単色 1 版で届かない暗さ（knee 以下）は
+ *    2 版重ねの狭い範囲へ詰め込まれるため、そのままだと複数の暗トーンが同じ色に
+ *    潰れる（実測: 26 段グレーの最暗 5 段が全部同色になっていた）。knee 以下だけを
+ *    印刷可能な最暗トーン（floor）へ向けて滑らかに圧縮し、暗部の階調差を残す。
+ *    圧縮は目標色を紙色へ寄せる形で行うので、影にも紙の色が乗る。
  */
 function applyTwoInkNaturalFit(
   densityMaps: Float32Array[],
@@ -605,15 +698,24 @@ function applyTwoInkNaturalFit(
   const s0: [number, number, number] = [1 - inkRgbs[i0].r / 255, 1 - inkRgbs[i0].g / 255, 1 - inkRgbs[i0].b / 255];
   const s1: [number, number, number] = [1 - inkRgbs[i1].r / 255, 1 - inkRgbs[i1].g / 255, 1 - inkRgbs[i1].b / 255];
   const P: [number, number, number] = [paper.r / 255, paper.g / 255, paper.b / 255];
-  const Y: [number, number, number] = [0.2126, 0.7152, 0.0722];
-  const LAMBDA = 3; // 明度（トーン）を優先する重み
+  const Y = TONE_Y;
+
+  const range = twoInkToneRange(inkRgbs[i0], inkRgbs[i1], paper, o);
+  const tac = range.tac;
+  const toneFloor = range.floor;
+  const toneKnee = range.knee;
+  const shoulderTop = range.shoulderTop;
+  const paperTone = Y[0] * P[0] + Y[1] * P[1] + Y[2] * P[2];
 
   // ink A の密度を、もう片方 (dB, sB) を固定して閉形式で更新する。
+  // hi は総インク量上限による上限（もう片方を固定したときの残り）。
   const coord = (
     sA: [number, number, number],
     sB: [number, number, number],
     dB: number,
-    T: [number, number, number]
+    T: [number, number, number],
+    hi: number,
+    lam: number
   ): number => {
     let BB = 0, Be0 = 0, yB = 0, ye0 = 0;
     for (let c = 0; c < 3; c++) {
@@ -624,10 +726,22 @@ function applyTwoInkNaturalFit(
       const e0 = Ac - T[c];
       BB += Bc * Bc; Be0 += Bc * e0; yB += Y[c] * Bc; ye0 += Y[c] * e0;
     }
-    const denom = BB + LAMBDA * yB * yB;
+    const denom = BB + lam * yB * yB;
     if (denom <= 1e-9) return 0;
-    const d = -(Be0 + LAMBDA * yB * ye0) / denom;
-    return d < 0 ? 0 : d > 1 ? 1 : d;
+    const d = -(Be0 + lam * yB * ye0) / denom;
+    return d < 0 ? 0 : d > hi ? hi : d;
+  };
+
+  // 目的関数（輝度重み付き RGB 距離）。上限線上の 1 次元探索に使う。
+  const objective = (
+    d0: number, d1: number, T: [number, number, number], lam: number
+  ): number => {
+    let sq = 0, ye = 0;
+    for (let c = 0; c < 3; c++) {
+      const e = twoInkForward(d0, d1, c, s0, s1, P, o) - T[c];
+      sq += e * e; ye += Y[c] * e;
+    }
+    return sq + lam * ye * ye;
   };
 
   const map0 = densityMaps[i0];
@@ -635,6 +749,10 @@ function applyTwoInkNaturalFit(
   const data = source.data;
   const pixelCount = source.width * source.height;
   const T: [number, number, number] = [0, 0, 0];
+  // 上限線 d0+d1 = tac 上で d0 が動ける範囲
+  const tLo = Math.max(0, tac - 1);
+  const tHi = Math.min(1, tac);
+
   for (let p = 0; p < pixelCount; p++) {
     const off = p * 4;
     const alpha = data[off + 3] / 255;
@@ -643,13 +761,68 @@ function applyTwoInkNaturalFit(
     T[0] = (1 - alpha) * P[0] + (alpha * data[off]) / 255;
     T[1] = (1 - alpha) * P[1] + (alpha * data[off + 1]) / 255;
     T[2] = (1 - alpha) * P[2] + (alpha * data[off + 2]) / 255;
+
+    // 影のトーン持ち上げ: 印刷可能な最暗トーン（floor）より暗い色は、そのままだと
+    // すべて最暗点へ張り付いて 1 色に潰れる（実測: 26 段グレーの最暗 5 段が同色）。
+    //   y' = y + floor·(1 − y/K)²
+    // は y=0 で floor、y=K で傾き 1 のまま素通しに戻る単調カーブで、底にも傾きが
+    // 残るので暗部の階調差が保たれる。持ち上げは紙色へのブレンドで行うため、
+    // 影にも紙の色が入る（＝紙が 3 色目として発色に参加する）。
+    const yt = Y[0] * T[0] + Y[1] * T[1] + Y[2] * T[2];
+    if (yt < shoulderTop) {
+      const u = 1 - yt / shoulderTop;
+      const lifted = yt + toneFloor * u * u;
+      const denom = paperTone - yt;
+      if (denom > 1e-4) {
+        const s = Math.max(0, Math.min(1, (lifted - yt) / denom));
+        T[0] += s * (P[0] - T[0]);
+        T[1] += s * (P[1] - T[1]);
+        T[2] += s * (P[2] - T[2]);
+      }
+    }
+
+    // 影ほど「明度優先」にする。2 色とも彩度が高いと、中性色を作るにはインクを
+    // 足して互いの色を打ち消すのが色差的に有利になり、暗部は際限なくインクが
+    // 増えて上限に張り付く（＝紙が埋まって濁る）。単色で届かない暗さでは色相
+    // 一致を諦めてトーン一致を優先し、必要な明度が出た時点でインクを止める。
+    const shadowness = Math.max(
+      0, Math.min(1, (toneKnee - yt) / Math.max(1e-4, toneKnee - toneFloor))
+    );
+    const lam = TWO_INK_LAMBDA + (TWO_INK_LAMBDA_SHADOW - TWO_INK_LAMBDA) * shadowness;
+
     // NNLS 結果を初期値に座標降下（各座標は閉形式・6 スイープ）
     let d0 = map0[p];
     let d1 = map1[p];
+    if (d0 + d1 > tac) { const k = tac / (d0 + d1); d0 *= k; d1 *= k; }
     for (let sweep = 0; sweep < 6; sweep++) {
-      d0 = coord(s0, s1, d1, T);
-      d1 = coord(s1, s0, d0, T);
+      d0 = coord(s0, s1, d1, T, Math.min(1, tac - d1), lam);
+      d1 = coord(s1, s0, d0, T, Math.min(1, tac - d0), lam);
     }
+
+    // 上限に張り付いた場合、座標降下は上限線に沿って動けない（各座標を単独で
+    // 動かすと制約を破るため）ので、線上を 1 次元探索して最適点を取り直す。
+    if (d0 + d1 > tac - 1e-4) {
+      let bestT = d0, bestE = Infinity;
+      const COARSE = 24;
+      for (let i = 0; i <= COARSE; i++) {
+        const t = tLo + ((tHi - tLo) * i) / COARSE;
+        const e = objective(t, tac - t, T, lam);
+        if (e < bestE) { bestE = e; bestT = t; }
+      }
+      // 最良点の近傍をもう一段細かく探索
+      const step = (tHi - tLo) / COARSE;
+      const lo = Math.max(tLo, bestT - step);
+      const hi = Math.min(tHi, bestT + step);
+      const FINE = 8;
+      for (let i = 0; i <= FINE; i++) {
+        const t = lo + ((hi - lo) * i) / FINE;
+        const e = objective(t, tac - t, T, lam);
+        if (e < bestE) { bestE = e; bestT = t; }
+      }
+      d0 = bestT;
+      d1 = tac - bestT;
+    }
+
     map0[p] = d0;
     map1[p] = d1;
   }
