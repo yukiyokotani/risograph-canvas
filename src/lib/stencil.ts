@@ -682,17 +682,24 @@ export function computeStencil(
     return Math.sqrt(dR * dR + dG * dG + dB * dB) < ABSORPTION_THRESHOLD;
   });
 
+  // 単色（1インク）は色合わせが破綻する: 黒以外は「そのインク色が元画像にある画素だけ濃く」
+  // なり、それ以外は均一に潰れて絵の構造が消える（黒だけ吸収がニュートラルなので偶然うまくいく）。
+  // 単色のときは低吸収インクと同じく輝度ベースで密度を作り、どのインク色でも「そのインク色の
+  // モノクローム」になるようにする。複数色の分解パス（NNLS→snap→GCR）は一切変えない。
+  const singleInk = inkRgbs.length === 1;
+  const useLuminance = inkRgbs.map((_, i) => isLowAbsorption[i] || singleInk);
+
   // 中立（無彩色）インク＝黒/グレーを検出。GCR で「グレー成分」を担わせる。
   const NEUTRAL_CHROMA = 12; // Lab 彩度がこれ未満なら中立インクとみなす
   const isNeutral = inkRgbs.map((ink, i) => {
-    if (isLowAbsorption[i]) return false;
+    if (useLuminance[i]) return false;
     const [, a, b] = rgbToLab(ink.r, ink.g, ink.b);
     return Math.hypot(a, b) < NEUTRAL_CHROMA;
   });
   const neutralIdx: number[] = [];
   let chromaticCount = 0;
   for (let i = 0; i < inkRgbs.length; i++) {
-    if (isLowAbsorption[i]) continue;
+    if (useLuminance[i]) continue;
     if (isNeutral[i]) neutralIdx.push(i);
     else chromaticCount++;
   }
@@ -704,7 +711,7 @@ export function computeStencil(
   const decompInks: RGB[] = [];
   const decompIndexMap: number[] = []; // decompInks[i] → 元の colors[j]
   for (let i = 0; i < inkRgbs.length; i++) {
-    if (isLowAbsorption[i]) continue;
+    if (useLuminance[i]) continue;
     if (useGCR && i === kIndex) continue; // 黒は分解に入れず GCR で生成
     decompIndexMap.push(i);
     decompInks.push(inkRgbs[i]);
@@ -723,9 +730,9 @@ export function computeStencil(
   for (let di = 0; di < decompMaps.length; di++) {
     densityMaps[decompIndexMap[di]] = decompMaps[di];
   }
-  // 低吸収インクは輝度ベースで密度を生成
+  // 低吸収インク・単色は輝度ベースで密度を生成（暗いほど濃く＝そのインク色のモノクローム）
   for (let i = 0; i < inkRgbs.length; i++) {
-    if (!isLowAbsorption[i]) continue;
+    if (!useLuminance[i]) continue;
     const map = densityMaps[i];
     for (let p = 0; p < pixelCount; p++) {
       const off = p * 4;
