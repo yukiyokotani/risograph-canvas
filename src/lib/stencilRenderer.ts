@@ -11,10 +11,9 @@ import {
   computeStencil,
   type StencilOptions,
   type ImageDataLike,
-  type InkDensities,
 } from "./stencil";
-import { renderStencilWebGPU, type GpuStencilInput } from "./stencilGpu";
-import { computeInkDensitiesWebGPU } from "./stencilDecomposeGpu";
+import { compositeFromDensityBuffer } from "./stencilGpu";
+import { decomposeToGpuBuffer, type GpuDensities } from "./stencilDecomposeGpu";
 
 /** 版ずれ・グレインの既定シード（stencil.ts と一致させる） */
 const DEFAULT_SEED = 0x5f3759df;
@@ -64,41 +63,19 @@ function densityKey(source: ImageDataLike, o: StencilOptions): string {
   ]);
 }
 
-let densityCache: { key: string; densities: InkDensities } | null = null;
+// 濃度は GPU バッファのままキャッシュし、合成器へ直接渡す（GPU→CPU→GPU の往復を排除）。
+let densityCache: { key: string; densities: GpuDensities } | null = null;
 
-/** 濃度キャッシュを破棄（画像を変えたときなど、メモリを解放したい場合に使う） */
+/** 濃度キャッシュを破棄しバッファも解放する（画像を変えたときなど） */
 export function clearDensityCache(): void {
+  densityCache?.densities.densityBuffer.destroy();
   densityCache = null;
-}
-
-function toGpuInput(d: InkDensities, o: StencilOptions): GpuStencilInput {
-  const renderScale = o.renderScale ?? 1;
-  return {
-    densityMaps: d.densityMaps,
-    angles: d.angles,
-    inkRgbs: d.inkRgbs,
-    paper: d.paper,
-    width: d.width,
-    height: d.height,
-    // ピクセル単位のパラメータは computeStencil と同じく描画スケールへ比例させる
-    dotSize: o.dotSize * renderScale,
-    density: o.density ?? 1,
-    inkOpacity: o.inkOpacity ?? 0.85,
-    halftoneMode: o.halftoneMode ?? "am",
-    transparentBg: o.transparentBg ?? false,
-    misregistration: o.misregistration * renderScale,
-    grain: o.grain,
-    noise: o.noise ?? 0,
-    seed: o.seed ?? DEFAULT_SEED,
-    paperTexture: o.paperTexture ?? "felt",
-    paperTextureAmount: o.paperTextureAmount ?? 0.5,
-    renderScale,
-  };
 }
 
 /**
  * WebGPU 優先でステンシルを描画し、RGBA ピクセルを返す。
- * WebGPU が使えない/失敗した場合は CPU 実装にフォールバックする。
+ * 分解→合成を GPU バッファで直結し、濃度はキャッシュする（分解に効くパラメータが
+ * 変わったときだけ再分解）。WebGPU が使えない/失敗時は CPU 実装へフォールバック。
  */
 export async function renderStencilPixels(
   source: ImageDataLike,
@@ -112,12 +89,39 @@ export async function renderStencilPixels(
         densityCache && densityCache.key === key ? densityCache.densities : null;
       if (!densities) {
         // 分解も GPU で（LUT ではなく直接移植なので出力は CPU と一致）。
-        densities = await computeInkDensitiesWebGPU(device, source, options);
+        densities = await decomposeToGpuBuffer(device, source, options);
+        // 古いバッファを解放してから差し替え
+        if (densityCache && densityCache.densities !== densities) {
+          densityCache.densities.densityBuffer.destroy();
+        }
         densityCache = { key, densities };
       }
-      return await renderStencilWebGPU(device, toGpuInput(densities, options));
+      const renderScale = options.renderScale ?? 1;
+      return await compositeFromDensityBuffer(device, {
+        densityBuffer: densities.densityBuffer,
+        inkCount: densities.inkCount,
+        angles: densities.angles,
+        inkRgbs: densities.inkRgbs,
+        paper: densities.paper,
+        width: densities.width,
+        height: densities.height,
+        // ピクセル単位のパラメータは computeStencil と同じく描画スケールへ比例させる
+        dotSize: options.dotSize * renderScale,
+        density: options.density ?? 1,
+        inkOpacity: options.inkOpacity ?? 0.85,
+        halftoneMode: options.halftoneMode ?? "am",
+        transparentBg: options.transparentBg ?? false,
+        misregistration: options.misregistration * renderScale,
+        grain: options.grain,
+        noise: options.noise ?? 0,
+        seed: options.seed ?? DEFAULT_SEED,
+        paperTexture: options.paperTexture ?? "felt",
+        paperTextureAmount: options.paperTextureAmount ?? 0.5,
+        renderScale,
+      });
     } catch (e) {
-      // GPU 側で問題が起きても描画は止めない
+      // GPU 側で問題が起きても描画は止めない。壊れかけのキャッシュは破棄。
+      clearDensityCache();
       console.warn("[stencil] WebGPU 描画に失敗したため CPU にフォールバックします", e);
     }
   }

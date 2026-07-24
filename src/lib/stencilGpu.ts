@@ -43,15 +43,39 @@ export interface GpuStencilInput {
   renderScale: number;
 }
 
+export interface GpuComposeBufferInput {
+  /** Ink-major f32 storage. The caller owns this buffer. */
+  densityBuffer: GPUBuffer;
+  inkCount: number;
+  angles: number[];
+  inkRgbs: RGB[];
+  paper: RGB;
+  width: number;
+  height: number;
+  dotSize: number;
+  density: number;
+  inkOpacity: number;
+  halftoneMode: "am" | "fm";
+  transparentBg: boolean;
+  misregistration: number;
+  grain: number;
+  noise: number;
+  seed: number;
+  paperTexture: "none" | "felt" | "fiber";
+  paperTextureAmount: number;
+  renderScale: number;
+}
+
 /** RGBA 8bit ピクセル (length = width*height*4) を返す。 */
-export async function renderStencilWebGPU(
+export async function compositeFromDensityBuffer(
   _device: GPUDevice,
-  _input: GpuStencilInput
+  _input: GpuComposeBufferInput
 ): Promise<Uint8ClampedArray> {
   const device = _device;
   const input = _input;
   const {
-    densityMaps,
+    densityBuffer,
+    inkCount,
     angles,
     inkRgbs,
     paper,
@@ -74,31 +98,29 @@ export async function renderStencilWebGPU(
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 0 || height < 0) {
     throw new Error("width and height must be non-negative integers");
   }
-  if (densityMaps.length !== angles.length || densityMaps.length !== inkRgbs.length) {
-    throw new Error("densityMaps, angles, and inkRgbs must have the same length");
+  if (!Number.isInteger(inkCount) || inkCount < 0) {
+    throw new Error("inkCount must be a non-negative integer");
+  }
+  if (inkCount !== angles.length || inkCount !== inkRgbs.length) {
+    throw new Error("inkCount, angles, and inkRgbs must have the same value");
   }
 
   const pixelCount = width * height;
   if (!Number.isSafeInteger(pixelCount)) {
     throw new Error("image dimensions are too large");
   }
-  for (const densityMap of densityMaps) {
-    if (densityMap.length !== pixelCount) {
-      throw new Error("each density map must have width * height elements");
-    }
-  }
   if (pixelCount === 0) return new Uint8ClampedArray();
   if (!(dotSize > 0) || !Number.isFinite(dotSize)) {
     throw new Error("dotSize must be a positive finite number");
   }
 
-  const inkCount = densityMaps.length;
   const cellSize = halftoneMode === "am" ? dotSize + 2 : dotSize;
   const dotRadius = dotSize * 0.5;
   const ss = cellSize >= 9 ? 2 : cellSize >= 4.5 ? 3 : 4;
   const searchRange = Math.max(1, Math.ceil(dotRadius / cellSize));
   const outputByteLength = pixelCount * 4;
   const densityByteLength = pixelCount * inkCount * Float32Array.BYTES_PER_ELEMENT;
+  const densityBindingSize = Math.max(4, densityByteLength);
   const inkStrideFloats = 8;
   const inkByteLength = inkCount * inkStrideFloats * Float32Array.BYTES_PER_ELEMENT;
 
@@ -108,6 +130,9 @@ export async function renderStencilWebGPU(
     inkByteLength > device.limits.maxStorageBufferBindingSize
   ) {
     throw new Error("stencil input exceeds this device's storage-buffer limit");
+  }
+  if (densityBuffer.size < densityBindingSize) {
+    throw new Error("densityBuffer is smaller than the requested density data");
   }
 
   const shader = device.createShaderModule({
@@ -656,20 +681,6 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
   paramsView.setUint32(92, 0, true);
   paramsBuffer.unmap();
 
-  // WebGPU does not permit zero-sized buffers. One dummy element is enough
-  // for the zero-ink case because the shader never enters its ink loop.
-  const densityBuffer = device.createBuffer({
-    label: "stencil density maps",
-    size: Math.max(4, densityByteLength),
-    usage: GPUBufferUsage.STORAGE,
-    mappedAtCreation: true,
-  });
-  const densityUpload = new Float32Array(densityBuffer.getMappedRange());
-  for (let inkIndex = 0; inkIndex < inkCount; inkIndex++) {
-    densityUpload.set(densityMaps[inkIndex], inkIndex * pixelCount);
-  }
-  densityBuffer.unmap();
-
   const inkBuffer = device.createBuffer({
     label: "stencil inks",
     size: Math.max(32, inkByteLength),
@@ -710,7 +721,10 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
       layout: pipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: paramsBuffer } },
-        { binding: 1, resource: { buffer: densityBuffer } },
+        {
+          binding: 1,
+          resource: { buffer: densityBuffer, size: densityBindingSize },
+        },
         { binding: 2, resource: { buffer: inkBuffer } },
         { binding: 3, resource: { buffer: outputBuffer } },
       ],
@@ -732,9 +746,77 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
     return result;
   } finally {
     paramsBuffer.destroy();
-    densityBuffer.destroy();
     inkBuffer.destroy();
     outputBuffer.destroy();
     readbackBuffer.destroy();
+  }
+}
+
+/** RGBA 8bit ピクセル (length = width*height*4) を返す。 */
+export async function renderStencilWebGPU(
+  device: GPUDevice,
+  input: GpuStencilInput
+): Promise<Uint8ClampedArray> {
+  const { densityMaps, ...composeInput } = input;
+  const { angles, inkRgbs, width, height, dotSize } = input;
+
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 0 || height < 0) {
+    throw new Error("width and height must be non-negative integers");
+  }
+  if (densityMaps.length !== angles.length || densityMaps.length !== inkRgbs.length) {
+    throw new Error("densityMaps, angles, and inkRgbs must have the same length");
+  }
+
+  const pixelCount = width * height;
+  if (!Number.isSafeInteger(pixelCount)) {
+    throw new Error("image dimensions are too large");
+  }
+  for (const densityMap of densityMaps) {
+    if (densityMap.length !== pixelCount) {
+      throw new Error("each density map must have width * height elements");
+    }
+  }
+  if (pixelCount === 0) return new Uint8ClampedArray();
+  if (!(dotSize > 0) || !Number.isFinite(dotSize)) {
+    throw new Error("dotSize must be a positive finite number");
+  }
+
+  const inkCount = densityMaps.length;
+  const outputByteLength = pixelCount * Uint32Array.BYTES_PER_ELEMENT;
+  const densityByteLength =
+    pixelCount * inkCount * Float32Array.BYTES_PER_ELEMENT;
+  const inkByteLength =
+    inkCount * 8 * Float32Array.BYTES_PER_ELEMENT;
+  if (
+    outputByteLength > device.limits.maxStorageBufferBindingSize ||
+    densityByteLength > device.limits.maxStorageBufferBindingSize ||
+    inkByteLength > device.limits.maxStorageBufferBindingSize
+  ) {
+    throw new Error("stencil input exceeds this device's storage-buffer limit");
+  }
+
+  // WebGPU does not permit zero-sized buffers. One dummy element is enough
+  // for the zero-ink case because the shader never enters its ink loop.
+  const densityBuffer = device.createBuffer({
+    label: "stencil density maps",
+    size: Math.max(4, densityByteLength),
+    usage: GPUBufferUsage.STORAGE,
+    mappedAtCreation: true,
+  });
+
+  try {
+    const densityUpload = new Float32Array(densityBuffer.getMappedRange());
+    for (let inkIndex = 0; inkIndex < inkCount; inkIndex++) {
+      densityUpload.set(densityMaps[inkIndex], inkIndex * pixelCount);
+    }
+    densityBuffer.unmap();
+
+    return await compositeFromDensityBuffer(device, {
+      ...composeInput,
+      densityBuffer,
+      inkCount,
+    });
+  } finally {
+    densityBuffer.destroy();
   }
 }

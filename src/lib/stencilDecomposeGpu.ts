@@ -374,17 +374,28 @@ function resolveAngles(inkRgbs: RGB[], options: StencilOptions): number[] {
   return options.colors.map((color, index) => color.angle ?? autoAngles[index]);
 }
 
+export interface GpuDensities {
+  /** Ink-major f32 storage. The caller owns this buffer and must destroy it. */
+  densityBuffer: GPUBuffer;
+  inkCount: number;
+  angles: number[];
+  paper: RGB;
+  inkRgbs: RGB[];
+  width: number;
+  height: number;
+}
+
 /**
  * CPU の computeInkDensities と同じ各段階を、1 pixel / 1 invocation で直接計算する。
  *
  * WGSL は f32、CPU の反復計算は JS f64 なので、NNLS と Lab の最終ビットには小さな
- * 丸め差が生じる。出力は ink-major の storage buffer から色版ごとに読み戻す。
+ * 丸め差が生じる。出力は ink-major の storage buffer のまま返す。
  */
-export async function computeInkDensitiesWebGPU(
+export async function decomposeToGpuBuffer(
   device: GPUDevice,
   source: ImageDataLike,
   options: StencilOptions
-): Promise<InkDensities> {
+): Promise<GpuDensities> {
   const { colors } = options;
   const inkCount = colors.length;
   if (inkCount > MAX_INKS) {
@@ -394,7 +405,13 @@ export async function computeInkDensitiesWebGPU(
   }
 
   const { width, height } = source;
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 0 || height < 0) {
+    throw new Error("width and height must be non-negative integers");
+  }
   const pixelCount = width * height;
+  if (!Number.isSafeInteger(pixelCount)) {
+    throw new Error("image dimensions are too large");
+  }
   const inkRgbs = colors.map((color) => hexToRgb(color.color));
   const paper = options.paperColor ? hexToRgb(options.paperColor) : DEFAULT_PAPER;
   const inkOpacity = options.inkOpacity ?? 0.85;
@@ -435,9 +452,27 @@ export async function computeInkDensitiesWebGPU(
   }
 
   const angles = resolveAngles(inkRgbs, options);
+  const outputByteLength =
+    inkCount * pixelCount * Float32Array.BYTES_PER_ELEMENT;
+  if (
+    pixelCount * Uint32Array.BYTES_PER_ELEMENT >
+      device.limits.maxStorageBufferBindingSize ||
+    outputByteLength > device.limits.maxStorageBufferBindingSize
+  ) {
+    throw new Error(
+      "stencil decomposition input exceeds this device's storage-buffer limit"
+    );
+  }
+
   if (inkCount === 0 || pixelCount === 0) {
+    const densityBuffer = device.createBuffer({
+      label: "stencil decomposition output",
+      size: Math.max(4, outputByteLength),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
     return {
-      densityMaps: inkRgbs.map(() => new Float32Array(pixelCount)),
+      densityBuffer,
+      inkCount,
       angles,
       paper,
       inkRgbs,
@@ -557,17 +592,12 @@ export async function computeInkDensitiesWebGPU(
   new Float32Array(tableBuffer.getMappedRange()).set(tableData);
   tableBuffer.unmap();
 
-  const outputByteLength = inkCount * pixelCount * Float32Array.BYTES_PER_ELEMENT;
   const outputBuffer = device.createBuffer({
     label: "stencil decomposition output",
     size: outputByteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
-  const readbackBuffer = device.createBuffer({
-    label: "stencil decomposition readback",
-    size: outputByteLength,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+  let outputHandedOff = false;
 
   try {
     const module = device.createShaderModule({
@@ -600,26 +630,97 @@ export async function computeInkDensitiesWebGPU(
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
     pass.end();
-    encoder.copyBufferToBuffer(outputBuffer, 0, readbackBuffer, 0, outputByteLength);
     device.queue.submit([encoder.finish()]);
 
-    await readbackBuffer.mapAsync(GPUMapMode.READ);
-    const readback = new Float32Array(readbackBuffer.getMappedRange());
-    const densityMaps = inkRgbs.map((_, index) => {
-      const map = new Float32Array(pixelCount);
-      map.set(readback.subarray(index * pixelCount, (index + 1) * pixelCount));
-      return map;
-    });
-    readbackBuffer.unmap();
-
-    return { densityMaps, angles, paper, inkRgbs, width, height };
+    outputHandedOff = true;
+    return {
+      densityBuffer: outputBuffer,
+      inkCount,
+      angles,
+      paper,
+      inkRgbs,
+      width,
+      height,
+    };
   } finally {
     paramsBuffer.destroy();
     sourceBuffer.destroy();
     metaBuffer.destroy();
     precomputedBuffer.destroy();
     tableBuffer.destroy();
-    outputBuffer.destroy();
-    readbackBuffer.destroy();
+    if (!outputHandedOff) outputBuffer.destroy();
+  }
+}
+
+/**
+ * Decomposes and reads the ink-major GPU result back into the original
+ * per-ink Float32Array API.
+ */
+export async function computeInkDensitiesWebGPU(
+  device: GPUDevice,
+  source: ImageDataLike,
+  options: StencilOptions
+): Promise<InkDensities> {
+  const gpuDensities = await decomposeToGpuBuffer(device, source, options);
+  const {
+    densityBuffer,
+    inkCount,
+    angles,
+    paper,
+    inkRgbs,
+    width,
+    height,
+  } = gpuDensities;
+  const pixelCount = width * height;
+  const outputByteLength =
+    inkCount * pixelCount * Float32Array.BYTES_PER_ELEMENT;
+
+  if (outputByteLength === 0) {
+    densityBuffer.destroy();
+    return {
+      densityMaps: inkRgbs.map(() => new Float32Array(pixelCount)),
+      angles,
+      paper,
+      inkRgbs,
+      width,
+      height,
+    };
+  }
+
+  let readbackBuffer: GPUBuffer | undefined;
+  let readbackMapped = false;
+
+  try {
+    readbackBuffer = device.createBuffer({
+      label: "stencil decomposition readback",
+      size: outputByteLength,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    const encoder = device.createCommandEncoder({
+      label: "stencil decomposition readback commands",
+    });
+    encoder.copyBufferToBuffer(
+      densityBuffer,
+      0,
+      readbackBuffer,
+      0,
+      outputByteLength
+    );
+    device.queue.submit([encoder.finish()]);
+
+    await readbackBuffer.mapAsync(GPUMapMode.READ);
+    readbackMapped = true;
+    const readback = new Float32Array(readbackBuffer.getMappedRange());
+    const densityMaps = inkRgbs.map((_, index) => {
+      const map = new Float32Array(pixelCount);
+      map.set(readback.subarray(index * pixelCount, (index + 1) * pixelCount));
+      return map;
+    });
+
+    return { densityMaps, angles, paper, inkRgbs, width, height };
+  } finally {
+    if (readbackMapped) readbackBuffer?.unmap();
+    densityBuffer.destroy();
+    readbackBuffer?.destroy();
   }
 }

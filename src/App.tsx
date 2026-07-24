@@ -561,6 +561,37 @@ function App() {
     return Math.max(100, Math.min(availW, widthFromHeight));
   })();
 
+  // WebGPU が使えるか（使えるときだけ高解像度プレビューを有効化）
+  const [gpuAvailable, setGpuAvailable] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getGpuDevice().then((d) => { if (alive) setGpuAvailable(!!d); });
+    return () => { alive = false; };
+  }, []);
+
+  // ズームが落ち着いてから内部解像度を上げる（操作中は低解像度のまま＝カクつかせない）
+  const [settledZoom, setSettledZoom] = useState(1);
+  useEffect(() => {
+    const id = setTimeout(() => setSettledZoom(panzoom.zoom), 250);
+    return () => clearTimeout(id);
+  }, [panzoom.zoom]);
+
+  // 内部描画解像度の倍率（WebGPU のみ）。画面上の表示サイズ×ズーム×DPR に見合う
+  // 解像度を選び、renderScale も同じ倍率にして網点等の見た目は保つ。メモリ上限あり。
+  const qualityScale = (() => {
+    if (!gpuAvailable || !imageAspect) return 1;
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    const needed = (canvasWidth * settledZoom * dpr) / BASE_WIDTH;
+    let q = Math.max(1, Math.min(4, Math.ceil(needed - 0.05)));
+    // メモリ上限: 濃度バッファ = inkCount × pixelCount × 4byte。GPU の
+    // storage buffer 上限（多くは 128MB）に余裕を持たせ 96MB までに抑える。
+    const baseH = BASE_WIDTH / imageAspect;
+    const budgetBytes = 96 * 1024 * 1024;
+    while (q > 1 && BASE_WIDTH * q * baseH * q * colors.length * 4 > budgetBytes) q -= 1;
+    return q;
+  })();
+  const renderWidth = Math.round(BASE_WIDTH * qualityScale);
+
   const handleDownload = async () => {
     const scale = Number(downloadScale);
 
@@ -835,7 +866,8 @@ function App() {
               ref={canvasRef}
               src={imageSrc}
               colors={colors}
-              width={BASE_WIDTH}
+              width={renderWidth}
+              renderScale={qualityScale}
               dotSize={dotSize}
               misregistration={misregistration}
               grain={0}
