@@ -33,7 +33,7 @@ struct Params {
   bold: u32,
   snapEnabled: u32,
   cutoffEnabled: u32,
-  _padding0: u32,
+  twoInkFit: u32,
 
   inkOpacity: f32,
   snapStrength: f32,
@@ -126,6 +126,34 @@ fn coverageForLightness(inkIndex: u32, targetL: f32) -> f32 {
     }
   }
   return 1.0;
+}
+
+// 2色 Natural フィットの1座標更新（CPU applyTwoInkNaturalFit と同一）。
+// 順モデル F は片方の密度に対しアフィンなので、輝度重み付き RGB 距離の最小解は閉形式。
+fn twoInkCoord(sA: vec3<f32>, sB: vec3<f32>, dB: f32, tgt: vec3<f32>, o: f32, pp: vec3<f32>) -> f32 {
+  let Y = vec3<f32>(0.2126, 0.7152, 0.0722);
+  let LAMBDA = 3.0;
+  var BB = 0.0;
+  var Be0 = 0.0;
+  var yB = 0.0;
+  var ye0 = 0.0;
+  for (var c = 0u; c < 3u; c++) {
+    let Rc = 1.0 - o * dB * sB[c];
+    let U = 1.0 - o * dB;
+    let Ac = Rc + (pp[c] - 1.0) * U;
+    let Bc = -o * (sA[c] * Rc + (pp[c] - 1.0) * U);
+    let e0 = Ac - tgt[c];
+    BB += Bc * Bc;
+    Be0 += Bc * e0;
+    yB += Y[c] * Bc;
+    ye0 += Y[c] * e0;
+  }
+  let denom = BB + LAMBDA * yB * yB;
+  if (denom <= 1e-9) {
+    return 0.0;
+  }
+  let d = -(Be0 + LAMBDA * yB * ye0) / denom;
+  return clamp(d, 0.0, 1.0);
 }
 
 @compute @workgroup_size(8, 8)
@@ -233,6 +261,27 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
     if (inkMeta[MAX_INKS + i] != 0u) {
       densities[i] = (1.0 - sourceLuminance) * alpha;
     }
+  }
+
+  // 2色 × Natural: 加法 NNLS の代わりに乗算モデルへ直接フィット（snap は無効化済み）。
+  if (params.twoInkFit != 0u && alphaByte >= 1u) {
+    let sa = deltaAt(0u);
+    let sb = deltaAt(1u);
+    let o = params.inkOpacity;
+    let pp = vec3<f32>(params.paperR / 255.0, params.paperG / 255.0, params.paperB / 255.0);
+    let tt = vec3<f32>(
+      (1.0 - alpha) * pp.x + alpha * red / 255.0,
+      (1.0 - alpha) * pp.y + alpha * green / 255.0,
+      (1.0 - alpha) * pp.z + alpha * blue / 255.0
+    );
+    var d0 = densities[inkMeta[0u]];
+    var d1 = densities[inkMeta[1u]];
+    for (var sweep = 0u; sweep < 6u; sweep++) {
+      d0 = twoInkCoord(sa, sb, d1, tt, o, pp);
+      d1 = twoInkCoord(sb, sa, d0, tt, o, pp);
+    }
+    densities[inkMeta[0u]] = d0;
+    densities[inkMeta[1u]] = d1;
   }
 
   if (params.snapEnabled != 0u && alphaByte >= 3u) {
@@ -537,9 +586,11 @@ export async function decomposeToGpuBuffer(
   params.setUint32(24, useGcr ? 1 : 0, true);
   params.setUint32(28, options.invert ? 1 : 0, true);
   params.setUint32(32, bold ? 1 : 0, true);
-  params.setUint32(36, decompIndexMap.length >= 2 ? 1 : 0, true);
+  // 2色 × Natural は乗算モデルフィットを使い、従来の snap は無効化する。
+  const twoInkFit = !bold && inkCount === 2 && decompIndexMap.length === 2;
+  params.setUint32(36, !twoInkFit && decompIndexMap.length >= 2 ? 1 : 0, true);
   params.setUint32(40, highlightCutoff > 0 && highlightCutoff < 1 ? 1 : 0, true);
-  params.setUint32(44, 0, true);
+  params.setUint32(44, twoInkFit ? 1 : 0, true);
   params.setFloat32(48, inkOpacity, true);
   params.setFloat32(52, bold ? 0.5 + gamutThreshold : 0, true);
   params.setFloat32(56, blackGeneration, true);

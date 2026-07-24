@@ -23,6 +23,10 @@ const PRESETS: Record<string, { name: string; color: string }[]> = {
   "mono-black": [{ name: "Black", color: "#000000" }],
   "mono-red": [{ name: "Red", color: "#E93A28" }],
   "mono-blue": [{ name: "Blue", color: "#0078BF" }],
+  "pink-blue": [
+    { name: "Fl. Pink", color: "#F0409A" },
+    { name: "Mid Blue", color: "#3255A4" },
+  ],
 };
 
 const $ = (id: string) => document.getElementById(id)!;
