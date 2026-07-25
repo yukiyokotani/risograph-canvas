@@ -60,7 +60,9 @@ function densityKey(source: ImageDataLike, o: StencilOptions): string {
     sourceId(source), source.width, source.height,
     o.colors.map((c) => `${c.color}:${c.angle ?? ""}`),
     o.separation, o.blackGeneration, o.highlightCutoff,
-    o.invert, o.inkOpacity, o.paperColor,
+    o.inkOpacity, o.paperColor,
+    // トーンカーブは分解前に入力を変えるのでキーに含める
+    o.toneLut ? Array.from(o.toneLut) : null,
   ]);
 }
 

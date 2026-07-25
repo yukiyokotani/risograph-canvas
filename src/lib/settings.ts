@@ -1,4 +1,5 @@
 import type { StencilColor, HalftoneMode, PaperTexture } from "./stencil";
+import type { ToneCurves } from "./curve";
 
 /**
  * 復元対象の設定一式（画像は含めない）。
@@ -20,5 +21,6 @@ export interface StencilSettings {
   paperTextureAmount: number;
   noise: number;
   transparentBg: boolean;
-  invert: boolean;
+  /** トーンカーブ（色分解の手前で入力画像を整える。反転もこれで表す） */
+  curves: ToneCurves;
 }

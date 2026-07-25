@@ -9,6 +9,7 @@ import {
   type ImageDataLike,
 } from "../lib/stencil";
 import { renderStencilPixels } from "../lib/stencilRenderer";
+import { buildToneLut, INVERT_CURVES } from "../lib/curve";
 import {
   analyzeSource,
   generateCandidates,
@@ -26,6 +27,9 @@ import {
   type Candidate,
   type SourceStats,
 } from "../lib/discover";
+
+/** 黒紙の候補で使う反転カーブ（旧 invert 相当）を 1 度だけ焼いておく */
+const INVERT_LUT = buildToneLut(INVERT_CURVES);
 
 const PAGE = 48; // 1 回の補充で生成する候補数（この中から重複と潰れを落として採用する）
 const MAX_ITEMS = 240; // 実質的なバリエーションは有限なので、この辺りで打ち切る
@@ -66,7 +70,7 @@ function buildOptions(cand: Candidate, srcWidth: number): StencilOptions {
     paperTextureAmount: DISCOVER_FIXED.paperTextureAmount,
     noise: DISCOVER_FIXED.noise,
     transparentBg: false,
-    invert: cand.invert,
+    toneLut: cand.invert ? INVERT_LUT : undefined,
     renderScale: srcWidth / PREVIEW_BASE_WIDTH,
   };
 }

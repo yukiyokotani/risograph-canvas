@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { densityCurve } from "./halftone";
+import { buildToneLut, INVERT_CURVES } from "./curve";
 import { rgbToLab, hexToRgb, luminance } from "./color";
 import {
   buildLightnessTable,
@@ -32,7 +33,6 @@ function options(overrides: Partial<StencilOptions> = {}): StencilOptions {
     highlightCutoff: 0,
     noise: 0,
     transparentBg: false,
-    invert: false,
     renderScale: 1,
     paperTexture: "none",
     paperTextureAmount: 0,
@@ -196,11 +196,17 @@ describe("computeInkDensities", () => {
     expect(angles[0]).toBe(75);
   });
 
-  it("invert は明暗を入れ替える", () => {
-    const normal = computeInkDensities(fixture(), options({ colors: [{ name: "k", color: "#000000" }] }));
+  it("反転カーブは明暗を入れ替える（旧 invert 相当）", () => {
+    const normal = computeInkDensities(
+      fixture(),
+      options({ colors: [{ name: "k", color: "#000000" }] })
+    );
     const inverted = computeInkDensities(
       fixture(),
-      options({ colors: [{ name: "k", color: "#000000" }], invert: true })
+      options({
+        colors: [{ name: "k", color: "#000000" }],
+        toneLut: buildToneLut(INVERT_CURVES),
+      })
     );
     expect(normal.densityMaps[0][0]).toBeLessThan(normal.densityMaps[0][2]);
     expect(inverted.densityMaps[0][0]).toBeGreaterThan(inverted.densityMaps[0][2]);

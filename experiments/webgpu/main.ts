@@ -3,6 +3,22 @@
 import { computeStencil, computeInkDensities, type InkDensities, type StencilOptions } from "../../src/lib/stencil";
 import { renderStencilWebGPU, type GpuStencilInput } from "../../src/lib/stencilGpu";
 import { computeInkDensitiesWebGPU } from "../../src/lib/stencilDecomposeGpu";
+import { buildToneLut, IDENTITY_CURVES } from "../../src/lib/curve";
+
+// カーブのパリティ検証用（S 字を一括チャンネルに当てる）
+const CURVE_LUT = buildToneLut({
+  ...IDENTITY_CURVES,
+  rgb: [
+    { x: 0, y: 0 },
+    { x: 0.25, y: 0.12 },
+    { x: 0.75, y: 0.88 },
+    { x: 1, y: 1 },
+  ],
+  r: [
+    { x: 0, y: 0.05 },
+    { x: 1, y: 0.95 },
+  ],
+});
 
 const PRESETS: Record<string, { name: string; color: string }[]> = {
   tricolor: [
@@ -117,6 +133,7 @@ async function run() {
     separation: parseFloat(($("sep") as HTMLSelectElement).value), blackGeneration: 0.7,
     highlightCutoff: parseFloat(($("cutoff") as HTMLSelectElement).value),
     noise, transparentBg: false, invert: false, renderScale, seed,
+    toneLut: ($("curve") as HTMLInputElement).checked ? CURVE_LUT : undefined,
     paperTexture, paperTextureAmount,
   };
 
@@ -198,7 +215,7 @@ async function run() {
     log("requesting WebGPU device…");
     await initGPU();
     ($("run") as HTMLButtonElement).onclick = run;
-    for (const id of ["preset", "mode", "dot", "fx", "size", "paper", "sep", "cutoff", "skipcpu", "gpudecomp"]) {
+    for (const id of ["preset", "mode", "dot", "fx", "size", "paper", "sep", "cutoff", "curve", "skipcpu", "gpudecomp"]) {
       ($(id) as HTMLElement).onchange = run;
     }
     await run();

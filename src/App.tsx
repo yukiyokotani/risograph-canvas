@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   StencilCanvas,
@@ -28,6 +28,7 @@ import {
   Moon,
   RotateCcw,
   Shuffle,
+  Spline,
   Sun,
   ZoomIn,
   ZoomOut,
@@ -40,6 +41,14 @@ import { DISCOVER_FIXED, type Candidate } from "./lib/discover";
 import { usePanZoom } from "./hooks/usePanZoom";
 import { useSettingsHistory } from "./hooks/useSettingsHistory";
 import type { StencilSettings } from "./lib/settings";
+import { CurvesDialog } from "./components/CurvesDialog";
+import {
+  buildToneLut,
+  isIdentityCurves,
+  IDENTITY_CURVES,
+  INVERT_CURVES,
+  type ToneCurves,
+} from "./lib/curve";
 import { useVisualHistory } from "./hooks/useVisualHistory";
 
 import { Button } from "@/components/ui/button";
@@ -191,7 +200,7 @@ const guide = {
     sections: [
       {
         heading: "Image",
-        body: "Choose an image from your device. Everything is processed locally in your browser — nothing is uploaded.\n\nInvert tones flips the input image's tones (light ↔ dark) before printing. Useful when printing a light ink (e.g. white) on dark paper, so bright areas become heavily inked.",
+        body: "Choose an image from your device. Everything is processed locally in your browser — nothing is uploaded.\n\nCurves opens a tone-curve editor that shapes the photo before it is separated into inks — the same stage as Invert tones. Drag the line to lift or crush parts of the tonal range, per RGB or per channel; a dot on the button means a curve is active. The curve always stays monotonic, so tones never fold back on themselves.\n\nInvert tones flips the input image's tones (light ↔ dark) before printing. Useful when printing a light ink (e.g. white) on dark paper, so bright areas become heavily inked.",
       },
       {
         heading: "Paper",
@@ -256,7 +265,7 @@ const guide = {
     sections: [
       {
         heading: "画像",
-        body: "デバイスから画像を選択します。処理はすべてブラウザ内で完結し、画像がアップロードされることはありません。\n\n「Invert tones」は入力画像の階調（明↔暗）を反転してから印刷します。暗い紙に明るいインク（白など）で刷るときに便利で、元画像の明るい部分にインクが多く乗ります。",
+        body: "デバイスから画像を選択します。処理はすべてブラウザ内で完結し、画像がアップロードされることはありません。\n\n「Curves」はトーンカーブの編集です。色分解の手前（Invert tones と同じ段）で写真の階調を整えます。線をドラッグして特定の明るさを持ち上げたり潰したりでき、RGB 一括と R/G/B 別を切り替えられます。ボタンの点は「カーブが効いている」印です。曲線は常に単調なので、階調が逆転することはありません。\n\n「Invert tones」は入力画像の階調（明↔暗）を反転してから印刷します。暗い紙に明るいインク（白など）で刷るときに便利で、元画像の明るい部分にインクが多く乗ります。",
       },
       {
         heading: "用紙 (Paper)",
@@ -545,7 +554,14 @@ function App() {
   const [paperColor, setPaperColor] = useState("#f5f0e8");
   const [noise, setNoise] = useState(0);
   const [transparentBg, setTransparentBg] = useState(false);
-  const [invert, setInvert] = useState(false);
+  const [curves, setCurves] = useState<ToneCurves>(IDENTITY_CURVES);
+  const [curvesOpen, setCurvesOpen] = useState(false);
+  const curvesActive = !isIdentityCurves(curves);
+  // 曲線 → 256×3 の LUT。CPU/GPU に同じものを渡す（曲線が恒等なら渡さない）。
+  const toneLut = useMemo(
+    () => (curvesActive ? buildToneLut(curves) : undefined),
+    [curves, curvesActive]
+  );
   const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>(HALFTONE_DEFAULTS.halftoneMode);
   const [separation, setSeparation] = useState(HALFTONE_DEFAULTS.separation);
   const [blackGeneration, setBlackGeneration] = useState(HALFTONE_DEFAULTS.blackGeneration);
@@ -596,6 +612,67 @@ function App() {
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     };
   }, []);
+
+  // カーブ編集の背景に敷く入力画像のヒストグラム（256 段・0–1 正規化）
+  const [histogram, setHistogram] = useState<{
+    r: Float32Array;
+    g: Float32Array;
+    b: Float32Array;
+  } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setHistogram(null);
+    loadImage(imageSrc)
+      .then((img) => {
+        if (!alive) return;
+        const w = 160;
+        const h = Math.max(1, Math.round((img.naturalHeight / img.naturalWidth) * w));
+        const { data } = getImageData(img, w, h);
+        const r = new Float32Array(256);
+        const g = new Float32Array(256);
+        const b = new Float32Array(256);
+        for (let i = 0; i < data.length; i += 4) {
+          r[data[i]]++;
+          g[data[i + 1]]++;
+          b[data[i + 2]]++;
+        }
+        // そのままだと、階調が飛び飛びの画像（グラデの階段など）で 1 段に度数が
+        // 集中し、「途中で終わる縦線」の集まりに見えてしまう。軽く平滑化して
+        // 分布の形として読めるようにする。
+        const R = 8; // 階調が飛び飛びでも「分布の形」として読める程度に広く均す
+        const K: number[] = [];
+        for (let k = -R; k <= R; k++) K.push(Math.exp(-(k * k) / (2 * (R / 2) ** 2)));
+        const kSum = K.reduce((a, b) => a + b, 0);
+        const smooth = (bins: Float32Array) => {
+          const out = new Float32Array(256);
+          for (let i = 0; i < 256; i++) {
+            let acc = 0;
+            for (let k = -R; k <= R; k++) {
+              const j = Math.min(255, Math.max(0, i + k));
+              acc += bins[j] * K[k + R];
+            }
+            out[i] = acc / kSum;
+          }
+          return out;
+        };
+        // 正規化は最大値ではなく上位側の代表値で行う（1 本の突出で全体が潰れないように）
+        const normalize = (bins: Float32Array) => {
+          const sorted = Float32Array.from(bins).sort();
+          const p98 = sorted[Math.floor(255 * 0.98)] || sorted[255] || 1;
+          for (let i = 0; i < 256; i++) bins[i] = Math.min(1, bins[i] / p98);
+          return bins;
+        };
+        setHistogram({
+          r: normalize(smooth(r)),
+          g: normalize(smooth(g)),
+          b: normalize(smooth(b)),
+        });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [imageSrc]);
 
   // Track image aspect ratio (width / height)
   const [imageAspect, setImageAspect] = useState<number | null>(null);
@@ -706,7 +783,7 @@ function App() {
         paperTextureAmount,
         noise,
         transparentBg,
-        invert,
+        toneLut,
         renderScale: scale,
       };
 
@@ -831,7 +908,7 @@ function App() {
   const applyCandidate = (cand: Candidate) => {
     setColors([...cand.colors]);
     setPaperColor(cand.paperColor);
-    setInvert(cand.invert);
+    setCurves(cand.invert ? INVERT_CURVES : IDENTITY_CURVES);
     setDotSize(cand.dotSize);
     setDensity(cand.density);
     setInkOpacity(cand.inkOpacity);
@@ -879,7 +956,7 @@ function App() {
     paperTextureAmount,
     noise,
     transparentBg,
-    invert,
+    curves,
   };
   // 以前は設定履歴を localStorage に置いていた。今はメモリ保持なので、
   // 既存ユーザーのストレージに残った古いキーを掃除しておく。
@@ -915,7 +992,7 @@ function App() {
     setPaperTextureAmount(s.paperTextureAmount);
     setNoise(s.noise);
     setTransparentBg(s.transparentBg);
-    setInvert(s.invert);
+    setCurves(s.curves ?? IDENTITY_CURVES);
     // 復元した色がちょうどプリセットと一致するならプリセット表示も戻す
     // （Undo でプリセットへ戻ったのに選択欄が空になるのを防ぐ）。
     setPresetKey(matchPresetKey(s.colors));
@@ -1043,7 +1120,7 @@ function App() {
               paperTextureAmount={paperTextureAmount}
               noise={noise}
               transparentBg={transparentBg}
-              invert={invert}
+              toneLut={toneLut}
               className="shadow-lg"
               style={{ width: Math.round(canvasWidth), height: "auto" }}
             />
@@ -1208,20 +1285,18 @@ function App() {
               >
                 Choose File
               </Button>
-              <div className="flex items-center gap-1.5">
-                <Checkbox
-                  id="invert"
-                  checked={invert}
-                  onCheckedChange={(v: boolean) => setInvert(v)}
-                />
-                <Label
-                  htmlFor="invert"
-                  className="text-xs text-muted-foreground"
-                  title="Invert the input image's tones (light ↔ dark) before printing"
-                >
-                  Invert tones
-                </Label>
-              </div>
+              <Button
+                variant="outline"
+                className="h-9 shrink-0 gap-1.5 text-xs"
+                onClick={() => setCurvesOpen(true)}
+                title="Shape the photo's tones before it is separated into inks"
+              >
+                <Spline className="h-3.5 w-3.5" />
+                Curves
+                {curvesActive && (
+                  <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-foreground/70" />
+                )}
+              </Button>
             </div>
             <input
               ref={fileInputRef}
@@ -1645,6 +1720,14 @@ function App() {
           GitHub
         </a>
       </footer>
+
+      <CurvesDialog
+        open={curvesOpen}
+        onOpenChange={setCurvesOpen}
+        curves={curves}
+        onChange={setCurves}
+        histogram={histogram}
+      />
 
       {discoverOpen && (
         <Suspense fallback={null}>
