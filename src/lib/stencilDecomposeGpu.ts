@@ -8,7 +8,8 @@ import {
   type StencilOptions,
 } from "./stencil";
 
-const MAX_INKS = 8;
+/** GPU 分解が一度に扱えるインク数の上限（UI 側の上限もこれに合わせる） */
+export const MAX_INKS = 8;
 const LIGHTNESS_STEPS = 64;
 const TABLE_SIZE = LIGHTNESS_STEPS + 1;
 const RISO_SCREEN_ANGLES = [45, 75, 15, 0, 30, 60, 90, 105];
@@ -234,6 +235,9 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // A separate unbounded NNLS solve measures hue error without treating the
     // d<=1 coverage limit as an out-of-gamut residual.
+    // 残差は snap でしか使わないので、snap を通らない構成では丸ごと省く
+    // （8 スイープ分＝分解の約 4 割）。CPU 側の needResidual と同じ判定。
+    if (params.snapEnabled != 0u) {
     for (var i = 0u; i < params.decompCount; i++) {
       let selfDot = gramAt(i, i);
       if (selfDot > 1e-10) {
@@ -261,6 +265,7 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
       remainder -= unbounded[i] * deltaAt(i);
     }
     residual = length(remainder);
+    }
   }
 
   // Low-absorption inks bypass NNLS and use the CPU's Rec. 709 luminance path.
@@ -414,6 +419,32 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
   }
 }
 `;
+
+// シェーダのコンパイルとパイプライン生成はデバイスごとに 1 回で足りる
+// （WGSL は定数、layout も "auto" 固定）。毎回作り直すと Discover のように
+// 候補を大量に描くとき、1 枚ごとにコンパイルを払うことになる。
+const decomposePipelines = new WeakMap<GPUDevice, Promise<GPUComputePipeline>>();
+
+function getDecomposePipeline(device: GPUDevice): Promise<GPUComputePipeline> {
+  let pipeline = decomposePipelines.get(device);
+  if (!pipeline) {
+    pipeline = device.createComputePipelineAsync({
+      label: "stencil decomposition pipeline",
+      layout: "auto",
+      compute: {
+        module: device.createShaderModule({
+          label: "stencil decomposition shader",
+          code: SHADER,
+        }),
+        entryPoint: "decompose",
+      },
+    });
+    // 失敗したらキャッシュに残さない（次回やり直せるように）
+    pipeline.catch(() => decomposePipelines.delete(device));
+    decomposePipelines.set(device, pipeline);
+  }
+  return pipeline;
+}
 
 function resolveAngles(inkRgbs: RGB[], options: StencilOptions): number[] {
   const autoAngles = new Array<number>(inkRgbs.length);
@@ -663,15 +694,7 @@ export async function decomposeToGpuBuffer(
   let outputHandedOff = false;
 
   try {
-    const module = device.createShaderModule({
-      label: "stencil decomposition shader",
-      code: SHADER,
-    });
-    const pipeline = await device.createComputePipelineAsync({
-      label: "stencil decomposition pipeline",
-      layout: "auto",
-      compute: { module, entryPoint: "decompose" },
-    });
+    const pipeline = await getDecomposePipeline(device);
     const bindGroup = device.createBindGroup({
       label: "stencil decomposition resources",
       layout: pipeline.getBindGroupLayout(0),
@@ -685,6 +708,10 @@ export async function decomposeToGpuBuffer(
       ],
     });
 
+    // 検証エラー/OOM は非同期に報告されるので、スコープで拾って例外にする
+    // （拾わないと壊れた密度バッファを成功として返してしまう）。
+    device.pushErrorScope("validation");
+    device.pushErrorScope("out-of-memory");
     const encoder = device.createCommandEncoder({
       label: "stencil decomposition commands",
     });
@@ -694,6 +721,13 @@ export async function decomposeToGpuBuffer(
     pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
     pass.end();
     device.queue.submit([encoder.finish()]);
+    const oomError = await device.popErrorScope();
+    const validationError = await device.popErrorScope();
+    if (oomError || validationError) {
+      throw new Error(
+        `WebGPU decompose failed: ${(validationError ?? oomError)!.message}`
+      );
+    }
 
     outputHandedOff = true;
     return {

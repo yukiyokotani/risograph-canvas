@@ -1,2 +1,3 @@
 User-agent: *
 Allow: /
+Sitemap: https://stencil-canvas.silurus.dev/sitemap.xml

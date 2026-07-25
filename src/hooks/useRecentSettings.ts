@@ -70,7 +70,7 @@ function persist(list: RecentEntry[]) {
  * ユーザーがローカルストレージを消しても失われるだけなので、
  * 「保存」ではなく「最近使った候補」として扱う想定。
  */
-export function useRecentSettings(current: StencilSettings) {
+export function useRecentSettings(current: StencilSettings, enabled = true) {
   const [recent, setRecent] = useState<RecentEntry[]>(() => load());
 
   const remember = useCallback((settings: StencilSettings) => {
@@ -99,11 +99,12 @@ export function useRecentSettings(current: StencilSettings) {
   const currentId = JSON.stringify(current);
   const initialId = useRef(currentId);
   useEffect(() => {
+    if (!enabled) return;
     if (currentId === initialId.current) return;
     const settings = JSON.parse(currentId) as StencilSettings;
     const t = setTimeout(() => remember(settings), CAPTURE_DELAY);
     return () => clearTimeout(t);
-  }, [currentId, remember]);
+  }, [currentId, remember, enabled]);
 
   return { recent, remove };
 }

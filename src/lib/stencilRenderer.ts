@@ -90,7 +90,28 @@ export function renderStencilPixels(
   source: ImageDataLike,
   options: StencilOptions
 ): Promise<Uint8ClampedArray> {
-  const run = renderLock.then(() => renderStencilPixelsInner(source, options));
+  return serialized(() => renderStencilPixelsInner(source, options, true));
+}
+
+/**
+ * GPU でのみ描画する（失敗しても CPU へ落とさず例外にする）。
+ *
+ * 書き出しのように「失敗したら Worker で処理したい」呼び出し側が使う。
+ * 既定の {@link renderStencilPixels} はメインスレッドの CPU 実装へ落ちるため、
+ * 大きな書き出しで GPU が容量制限に当たると UI が固まってしまう。
+ */
+export function renderStencilPixelsGpuOnly(
+  source: ImageDataLike,
+  options: StencilOptions
+): Promise<Uint8ClampedArray> {
+  return serialized(() => renderStencilPixelsInner(source, options, false));
+}
+
+/** 共有 GPU 状態の競合を防ぐため、呼び出しをグローバルに直列化する。 */
+function serialized(
+  task: () => Promise<Uint8ClampedArray>
+): Promise<Uint8ClampedArray> {
+  const run = renderLock.then(task);
   // 失敗しても後続を止めない（チェーンは常に解決扱いにする）
   renderLock = run.then(
     () => {},
@@ -101,7 +122,8 @@ export function renderStencilPixels(
 
 async function renderStencilPixelsInner(
   source: ImageDataLike,
-  options: StencilOptions
+  options: StencilOptions,
+  cpuFallback: boolean
 ): Promise<Uint8ClampedArray> {
   const device = await getGpuDevice();
   if (device) {
@@ -144,8 +166,10 @@ async function renderStencilPixelsInner(
     } catch (e) {
       // GPU 側で問題が起きても描画は止めない。壊れかけのキャッシュは破棄。
       clearDensityCache();
+      if (!cpuFallback) throw e;
       console.warn("[stencil] WebGPU 描画に失敗したため CPU にフォールバックします", e);
     }
   }
+  if (!cpuFallback) throw new Error("WebGPU is unavailable");
   return computeStencil(source, options);
 }

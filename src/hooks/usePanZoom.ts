@@ -41,7 +41,9 @@ export function usePanZoom(
   contentRef?: RefObject<HTMLElement | null>
 ) {
   const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
+  // pan の座標は state に持たない（CSS 変数で反映済み・描画には使わない）。
+  // 「初期状態か」だけをフラグとして持つ。
+  const [isDefault, setIsDefault] = useState(true);
   const [dragging, setDragging] = useState(false);
 
   // 計算用に最新値を ref で保持（イベントハンドラ内で参照）
@@ -66,12 +68,18 @@ export function usePanZoom(
         `translate(${p.x}px, ${p.y}px) scale(${z})`
       );
     }
-    // %/ボタン表示用の state 同期は 1 フレームに 1 回へ間引く
+    // 表示用の state 同期は 1 フレームに 1 回へ間引き、さらに「実際に変わったときだけ」
+    // 更新する。pan は座標そのものを描画に使っていない（CSS 変数側で反映済み）ので、
+    // ドラッグ中に毎フレーム state を書くとアプリ全体が再レンダーされるだけで得がない。
+    // 必要なのは倍率表示と「初期状態か」のフラグだけ。
     if (rafRef.current == null) {
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
-        setZoom(zoomRef.current);
-        setPan(panRef.current);
+        const z = zoomRef.current;
+        const pt = panRef.current;
+        setZoom((prev) => (prev === z ? prev : z));
+        const atDefault = z === 1 && pt.x === 0 && pt.y === 0;
+        setIsDefault((prev) => (prev === atDefault ? prev : atDefault));
       });
     }
   }, [contentRef]);
@@ -255,13 +263,8 @@ export function usePanZoom(
   const zoomOut = useCallback(() => zoomBy(1 / 1.25), [zoomBy]);
   const reset = useCallback(() => apply(1, { x: 0, y: 0 }), [apply]);
 
-  const isDefault = zoom === 1 && pan.x === 0 && pan.y === 0;
-  const transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
-
   return {
     zoom,
-    pan,
-    transform,
     isDefault,
     dragging,
     canZoomIn: zoom < MAX_ZOOM,
