@@ -32,27 +32,42 @@ const PRESETS: { label: string; points: CurvePoint[] }[] = [
   { label: "Linear", points: IDENTITY_POINTS },
   { label: "Invert", points: INVERT_POINTS },
   {
-    label: "Contrast",
+    // フルレンジの強め S 字。端点は守ったままコントラストだけ立てる
+    label: "Vivid",
     points: [
       { x: 0, y: 0 },
-      { x: 0.25, y: 0.16 },
-      { x: 0.75, y: 0.84 },
+      { x: 0.25, y: 0.12 },
+      { x: 0.75, y: 0.88 },
       { x: 1, y: 1 },
     ],
   },
   {
-    label: "Lift shadows",
+    // 黒を少し浮かせ（トウ）白を少し抑える（ショルダー）緩い S 字。退色フィルム風
+    label: "Film",
     points: [
-      { x: 0, y: 0.12 },
-      { x: 0.5, y: 0.55 },
+      { x: 0, y: 0.05 },
+      { x: 0.25, y: 0.18 },
+      { x: 0.75, y: 0.86 },
+      { x: 1, y: 0.97 },
+    ],
+  },
+  {
+    // インスタントカメラ風。黒は浮いてミルキー、ハイライトは早めに飛び切る
+    // （x≥0.8 は白へクリップ。白飛びしやすい Instax の写りに寄せる）
+    label: "Instant",
+    points: [
+      { x: 0, y: 0.1 },
+      { x: 0.45, y: 0.58 },
+      { x: 0.8, y: 1 },
       { x: 1, y: 1 },
     ],
   },
   {
-    label: "Punch darks",
+    // 中間調を持ち上げて明るく軽く。インクが薄くなり網点が開いて紙が活きる
+    label: "High key",
     points: [
       { x: 0, y: 0 },
-      { x: 0.45, y: 0.3 },
+      { x: 0.35, y: 0.52 },
       { x: 1, y: 1 },
     ],
   },
@@ -90,9 +105,9 @@ export function CurvesIcon({ className }: { className?: string }) {
       className={className}
       aria-hidden="true"
     >
-      <path d="M7.7 17.3C11 15.4 13 8.6 16.3 6.7" />
-      <circle cx="4.9" cy="18.9" r="2.4" fill="none" />
-      <circle cx="19.1" cy="5.1" r="2.4" fill="none" />
+      <path d="M8.23 17.6C15.02 15.9 8.98 8.1 15.77 6.4" />
+      <circle cx="5.31" cy="18.32" r="2.4" fill="none" />
+      <circle cx="18.69" cy="5.68" r="2.4" fill="none" />
     </svg>
   );
 }
