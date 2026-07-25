@@ -32,27 +32,40 @@ const PRESETS: { label: string; points: CurvePoint[] }[] = [
   { label: "Linear", points: IDENTITY_POINTS },
   { label: "Invert", points: INVERT_POINTS },
   {
-    label: "Contrast",
+    // フルレンジの強め S 字。端点は守ったままコントラストだけ立てる
+    label: "Vivid",
     points: [
       { x: 0, y: 0 },
-      { x: 0.25, y: 0.16 },
-      { x: 0.75, y: 0.84 },
+      { x: 0.25, y: 0.12 },
+      { x: 0.75, y: 0.88 },
       { x: 1, y: 1 },
     ],
   },
   {
-    label: "Lift shadows",
+    // 黒を少し浮かせ（トウ）白を少し抑える（ショルダー）緩い S 字。退色フィルム風
+    label: "Film",
+    points: [
+      { x: 0, y: 0.05 },
+      { x: 0.25, y: 0.18 },
+      { x: 0.75, y: 0.86 },
+      { x: 1, y: 0.97 },
+    ],
+  },
+  {
+    // インスタントカメラ風。黒を大きく浮かせ白も沈めた低コントラストのミルキー
+    label: "Instant",
     points: [
       { x: 0, y: 0.12 },
-      { x: 0.5, y: 0.55 },
-      { x: 1, y: 1 },
+      { x: 0.55, y: 0.6 },
+      { x: 1, y: 0.9 },
     ],
   },
   {
-    label: "Punch darks",
+    // 中間調を持ち上げて明るく軽く。インクが薄くなり網点が開いて紙が活きる
+    label: "High key",
     points: [
       { x: 0, y: 0 },
-      { x: 0.45, y: 0.3 },
+      { x: 0.35, y: 0.52 },
       { x: 1, y: 1 },
     ],
   },
