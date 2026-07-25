@@ -127,8 +127,12 @@ export function CurvesDialog({
     for (let i = 0; i < 256; i++) {
       combined[i] = Math.max(histogram.r[i], histogram.g[i], histogram.b[i]);
     }
+    // 折れ線の先頭 "M" を外して繋ぐので、区切りの "L" を明示する
+    // （付け忘れると M10,27010,250... のような不正なパスになり塗りが出ない）
     const area = (bins: Float32Array) =>
-      `M${PAD},${PAD + SIZE}` + line(bins).slice(1) + `L${PAD + SIZE},${PAD + SIZE}Z`;
+      `M${PAD},${PAD + SIZE}L` +
+      line(bins).slice(1) +
+      `L${PAD + SIZE},${PAD + SIZE}Z`;
     return {
       fill: area(combined),
       lines: [
