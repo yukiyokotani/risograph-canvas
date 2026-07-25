@@ -1,4 +1,5 @@
 import type { StencilColor } from "./lib/stencil";
+import { hexToRgb, rgbToLab } from "./lib/color";
 
 /** ステンシル印刷で実際に使われる代表的なインクカラー */
 export const INKS = {
@@ -77,6 +78,55 @@ export const INKS = {
   fluorescentBlue: { name: "Fl. Blue", color: "#2FA5DE" },
   fluorescentYellow: { name: "Fl. Yellow", color: "#DBEE2E" },
 } as const satisfies Record<string, StencilColor>;
+
+/**
+ * パレットの並び。ベタ書きの列挙順ではなく、選ぶときに探しやすい順に並べ替える。
+ *
+ *   Monotone   … 無彩色（Lab 彩度が低い）。明るい順。
+ *   Color      … 有彩色。色相順に並べるとスペクトラムになり、狙った色を探しやすい。
+ *   Fluorescent… 蛍光インク。実物のインクとして別物なので独立させる。色相順。
+ *
+ * インクを増やしても自動で適切な組に入るよう、名前ではなく実際の色から判定する。
+ */
+export interface InkGroup {
+  label: string;
+  entries: [string, StencilColor][];
+}
+
+const NEUTRAL_CHROMA = 12;
+
+export const INK_GROUPS: InkGroup[] = (() => {
+  const monotone: [string, StencilColor, number][] = [];
+  const color: [string, StencilColor, number][] = [];
+  const fluorescent: [string, StencilColor, number][] = [];
+
+  for (const [key, ink] of Object.entries(INKS) as [string, StencilColor][]) {
+    const { r, g, b } = hexToRgb(ink.color);
+    const [lightness, a, bb] = rgbToLab(r, g, b);
+    const chroma = Math.hypot(a, bb);
+    const hue = (Math.atan2(bb, a) * 180) / Math.PI;
+    if (key.startsWith("fluorescent")) {
+      fluorescent.push([key, ink, hue]);
+    } else if (chroma < NEUTRAL_CHROMA) {
+      // 無彩色は明るい順（白 → 黒）
+      monotone.push([key, ink, -lightness]);
+    } else {
+      color.push([key, ink, hue]);
+    }
+  }
+
+  const sorted = (list: [string, StencilColor, number][]) =>
+    list
+      .slice()
+      .sort((x, y) => x[2] - y[2])
+      .map(([key, ink]) => [key, ink] as [string, StencilColor]);
+
+  return [
+    { label: "Monotone", entries: sorted(monotone) },
+    { label: "Color", entries: sorted(color) },
+    { label: "Fluorescent", entries: sorted(fluorescent) },
+  ];
+})();
 
 /** 代表的な色の組み合わせプリセット */
 export const PRESETS = {

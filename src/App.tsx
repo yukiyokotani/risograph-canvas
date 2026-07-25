@@ -3,7 +3,7 @@ import {
   StencilCanvas,
   type StencilCanvasHandle,
 } from "./components/StencilCanvas";
-import { INKS, PRESETS } from "./presets";
+import { INK_GROUPS, PRESETS } from "./presets";
 import { hexToRgb, rgbToLab } from "./lib/color";
 import {
   getGpuDevice,
@@ -156,7 +156,6 @@ async function saveImageFromCanvas(
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const inkEntries = Object.entries(INKS);
 const presetEntries = Object.entries(PRESETS);
 
 /** 与えられたインク列と完全に一致するプリセットのキー（無ければ ""） */
@@ -446,22 +445,38 @@ function AddInkColorPicker({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-3" align="start">
-        {/* プリセットのインクパレット（候補） */}
-        <div className="mb-2 max-h-40 overflow-y-auto">
-          <div className="flex flex-wrap gap-1.5">
-            {inkEntries.map(([key, ink]) => (
-              <button
-                key={key}
-                title={ink.name}
-                onClick={() => {
-                  onAdd({ ...ink });
-                  setOpen(false);
-                }}
-                className="h-7 w-7 rounded-full border-2 border-transparent shadow-sm transition-colors hover:border-ring"
-                style={{ background: ink.color }}
-              />
-            ))}
-          </div>
+        {/* プリセットのインクパレット（候補）。モノトーン / 色 / 蛍光 で分け、
+            色の組は色相順に並べる（スペクトラムになり狙った色を探しやすい）。 */}
+        <div className="thin-scroll mb-2 max-h-56 overflow-y-auto pr-1">
+          {INK_GROUPS.map((group) => (
+            <div key={group.label} className="mb-2 last:mb-0">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                {group.label}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {group.entries.map(([key, ink]) => (
+                  <button
+                    key={key}
+                    aria-label={ink.name}
+                    onClick={() => {
+                      onAdd({ ...ink });
+                      setOpen(false);
+                    }}
+                    className="group/sw relative h-7 w-7 rounded-full border-2 border-transparent shadow-sm transition-colors hover:border-ring focus-visible:border-ring"
+                    style={{ background: ink.color }}
+                  >
+                    {/* 色名のツールチップ（ネイティブの title は出るのが遅いので自前で） */}
+                    <span
+                      role="tooltip"
+                      className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-foreground px-1.5 py-0.5 text-[10px] leading-tight text-background opacity-0 shadow transition-opacity group-hover/sw:opacity-100 group-focus-visible/sw:opacity-100"
+                    >
+                      {ink.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
         <Separator className="mb-2" />
         {/* 任意の色（スペクトラム + HEX） */}
