@@ -72,8 +72,7 @@ export interface CurvesDialogProps {
 }
 
 /**
- * トーンカーブのアイコン。4 つのアンカーを「上って・下って・上って」と通る曲線。
- * 山と谷を 1 つずつ持つので、変曲点が 2 つできる。
+ * トーンカーブのアイコン。3 つのアンカーを通る S 字の曲線。
  */
 export function CurvesIcon({ className }: { className?: string }) {
   return (
@@ -87,11 +86,10 @@ export function CurvesIcon({ className }: { className?: string }) {
       className={className}
       aria-hidden="true"
     >
-      <path d="M3 15C5 11 7 8 9 8C11 8 13 16 15 16C17 16 19 13 21 9" />
-      <circle cx="3" cy="15" r="1.8" fill="currentColor" stroke="none" />
-      <circle cx="9" cy="8" r="1.8" fill="currentColor" stroke="none" />
-      <circle cx="15" cy="16" r="1.8" fill="currentColor" stroke="none" />
-      <circle cx="21" cy="9" r="1.8" fill="currentColor" stroke="none" />
+      <path d="M3 20C9 20 9 12 12 12C15 12 15 4 21 4" />
+      <circle cx="3" cy="20" r="2.4" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" />
+      <circle cx="21" cy="4" r="2.4" fill="currentColor" stroke="none" />
     </svg>
   );
 }
