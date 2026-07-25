@@ -28,7 +28,6 @@ import {
   Moon,
   RotateCcw,
   Shuffle,
-  Spline,
   Sun,
   ZoomIn,
   ZoomOut,
@@ -41,7 +40,7 @@ import { DISCOVER_FIXED, type Candidate } from "./lib/discover";
 import { usePanZoom } from "./hooks/usePanZoom";
 import { useSettingsHistory } from "./hooks/useSettingsHistory";
 import type { StencilSettings } from "./lib/settings";
-import { CurvesDialog } from "./components/CurvesDialog";
+import { CurvesDialog, CurvesIcon } from "./components/CurvesDialog";
 import {
   buildToneLut,
   isIdentityCurves,
@@ -1291,7 +1290,7 @@ function App() {
                 onClick={() => setCurvesOpen(true)}
                 title="Shape the photo's tones before it is separated into inks"
               >
-                <Spline className="h-3.5 w-3.5" />
+                <CurvesIcon className="h-3.5 w-3.5" />
                 Curves
                 {curvesActive && (
                   <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-foreground/70" />

@@ -71,6 +71,29 @@ export interface CurvesDialogProps {
   histogram?: { r: Float32Array; g: Float32Array; b: Float32Array } | null;
 }
 
+/**
+ * トーンカーブのアイコン。S 字の三次曲線に、両端と中点のアンカーを置いたもの
+ * （カラコレ系ツールのカーブアイコンの定番の形）。
+ */
+export function CurvesIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M3 21C9 21 15 3 21 3" />
+      <circle cx="3" cy="21" r="2" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
+      <circle cx="21" cy="3" r="2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function CurvesDialog({
   open,
   onOpenChange,
