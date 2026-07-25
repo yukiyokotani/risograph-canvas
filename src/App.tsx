@@ -39,10 +39,7 @@ const DiscoverDialog = lazy(() =>
 import { DISCOVER_FIXED, type Candidate } from "./lib/discover";
 import { usePanZoom } from "./hooks/usePanZoom";
 import { useSettingsHistory } from "./hooks/useSettingsHistory";
-import {
-  useRecentSettings,
-  type StencilSettings,
-} from "./hooks/useRecentSettings";
+import type { StencilSettings } from "./lib/settings";
 import { useVisualHistory } from "./hooks/useVisualHistory";
 
 import { Button } from "@/components/ui/button";
@@ -866,7 +863,7 @@ function App() {
     return Math.hypot(la, lb) < 12;
   });
 
-  // 「最近使った設定」（localStorage）。明示的な保存ではなくサジェスト用。
+  // 「最近使った設定」。明示的な保存ではなくサジェスト用。
   const currentSettings: StencilSettings = {
     colors,
     dotSize,
@@ -884,18 +881,21 @@ function App() {
     transparentBg,
     invert,
   };
-  // WebGPU 環境ではサムネ付き履歴（useVisualHistory）を表示するので、
-  // localStorage 版は書き込みごと止める（読まれない履歴を 2.5 秒ごとに書いていた）。
-  const { recent, remove: removeRecent } = useRecentSettings(
-    currentSettings,
-    !gpuAvailable
-  );
-  // WebGPU 環境は「見た目つき履歴」（メモリのみ・多め）。CPU は従来の localStorage 履歴。
+  // 以前は設定履歴を localStorage に置いていた。今はメモリ保持なので、
+  // 既存ユーザーのストレージに残った古いキーを掃除しておく。
+  useEffect(() => {
+    try {
+      localStorage.removeItem("stencil-canvas:recent");
+    } catch {
+      // ストレージが使えない環境でも問題ない
+    }
+  }, []);
+
+  // 履歴はサムネ付きでメモリに保持する（設定は localStorage に持たない）。
   const getCanvas = useCallback(() => canvasRef.current?.getCanvas() ?? null, []);
   const { history: visualHistory } = useVisualHistory(
     currentSettings,
     getCanvas,
-    gpuAvailable,
     imageSrc,
   );
   const [recentOpen, setRecentOpen] = useState(false);
@@ -908,7 +908,7 @@ function App() {
     setInkOpacity(s.inkOpacity);
     setPaperColor(s.paperColor);
     setHalftoneMode(s.halftoneMode);
-    setSeparation(s.separation);
+    setSeparation(s.separation ?? 0);
     setBlackGeneration(s.blackGeneration ?? 0.7);
     setHighlightCutoff(s.highlightCutoff);
     setPaperTexture(s.paperTexture);
@@ -1084,7 +1084,7 @@ function App() {
                     size="icon"
                     className="h-9 w-9 shrink-0"
                     title="Recent settings"
-                    disabled={(gpuAvailable ? visualHistory.length : recent.length) === 0}
+                    disabled={visualHistory.length === 0}
                   >
                     <History className="h-4 w-4" />
                     <span className="sr-only">Recent settings</span>
@@ -1094,7 +1094,6 @@ function App() {
                   <div className="mb-1 px-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                     Recent
                   </div>
-                  {gpuAvailable ? (
                     <div className="thin-scroll grid max-h-80 grid-cols-3 overflow-y-auto">
                       {visualHistory.map((e) => (
                         <button
@@ -1127,53 +1126,6 @@ function App() {
                         </button>
                       ))}
                     </div>
-                  ) : (
-                  <div className="flex flex-col">
-                    {recent.map((e) => (
-                      <div key={e.id} className="group flex items-center gap-1">
-                        <button
-                          onClick={() => {
-                            applySettings(e.settings);
-                            setRecentOpen(false);
-                          }}
-                          title="Apply these settings"
-                          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-accent"
-                        >
-                          <span className="flex shrink-0 -space-x-1">
-                            {e.settings.colors.slice(0, 5).map((c, i) => (
-                              <span
-                                key={i}
-                                className="h-3.5 w-3.5 rounded-full border border-background"
-                                style={{ background: c.color }}
-                              />
-                            ))}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                            {e.settings.dotSize.toFixed(1)}px ·{" "}
-                            {e.settings.halftoneMode === "fm" ? "Density" : "Size"}
-                          </span>
-                          {e.savedAt > 0 && (
-                            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
-                              {new Date(e.savedAt).toLocaleString(undefined, {
-                                month: "numeric",
-                                day: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
-                            </span>
-                          )}
-                        </button>
-                        <button
-                          onClick={() => removeRecent(e.id)}
-                          aria-label="Remove from recent"
-                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sm leading-none text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  )}
                 </PopoverContent>
               </Popover>
               {/* Randomize */}
@@ -1453,8 +1405,9 @@ function App() {
                 </button>
               )}
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 lg:grid-cols-2">
-              <div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {/* Mode は 1 行使い、Dot Size と Density が必ず横並びになるようにする */}
+              <div className="sm:col-span-2">
                 <Label className="mb-2 text-xs text-muted-foreground">Mode</Label>
                 <Select value={halftoneMode} onValueChange={(v) => setHalftoneMode(v as HalftoneMode)}>
                   <SelectTrigger aria-label="Halftone mode" className="h-9 w-full text-xs">

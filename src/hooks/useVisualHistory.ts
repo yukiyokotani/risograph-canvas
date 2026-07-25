@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { StencilSettings } from "./useRecentSettings";
+import type { StencilSettings } from "../lib/settings";
 
 export interface VisualHistoryEntry {
   /** 設定内容から導出した識別子（重複判定に使用） */
@@ -57,7 +57,7 @@ function snapshot(canvas: HTMLCanvasElement): string | null {
 }
 
 /**
- * WebGPU 環境向けの「見た目つき履歴」。設定が一定時間落ち着くたびに、現在の
+ * 「見た目つき履歴」。設定が一定時間落ち着くたびに、現在の
  * キャンバスを縮小スナップショットしてメモリに控える（GPU の再描画は不要）。
  * localStorage は使わずセッション内のみ・多め（{@link MAX}）に保持し、スクロールで
  * 結構遡れるようにする。画像を変えたら履歴はリセットする。
@@ -65,7 +65,6 @@ function snapshot(canvas: HTMLCanvasElement): string | null {
 export function useVisualHistory(
   current: StencilSettings,
   getCanvas: () => HTMLCanvasElement | null,
-  enabled: boolean,
   resetKey: string,
 ) {
   const [history, setHistory] = useState<VisualHistoryEntry[]>([]);
@@ -82,7 +81,6 @@ export function useVisualHistory(
 
   // 初期表示（デフォルト値）を含め、設定が一定時間落ち着くたびにスナップショットを控える。
   useEffect(() => {
-    if (!enabled) return;
     const settings = JSON.parse(currentId) as StencilSettings;
     const t = setTimeout(() => {
       const canvas = getCanvas();
@@ -98,7 +96,7 @@ export function useVisualHistory(
       });
     }, CAPTURE_DELAY);
     return () => clearTimeout(t);
-  }, [currentId, enabled, getCanvas, resetKey]);
+  }, [currentId, getCanvas, resetKey]);
 
   const remove = useCallback((id: string) => {
     setHistory((prev) => prev.filter((e) => e.id !== id));
