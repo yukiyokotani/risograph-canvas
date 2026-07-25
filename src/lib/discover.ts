@@ -478,28 +478,3 @@ export function scoreRender(
     variation: vc ? variationSum / vc : 0,
   };
 }
-
-/**
- * 採点済み候補を並べて上位を選抜。distinction 降順を主に、潰れ（variation 低）を落とし、
- * 同一パレットの重複を避けて多様性を確保する。
- */
-export function rankAndSelect(scored: ScoredCandidate[], n: number): ScoredCandidate[] {
-  const alive = scored.filter((c) => c.variation > 7); // 潰れガード
-  alive.sort((a, b) => b.distinction - a.distinction);
-  const out: ScoredCandidate[] = [];
-  const seen = new Set<string>();
-  const sig = (c: Candidate) =>
-    c.colors.map((x) => x.color).sort().join(",") + "|" + c.invert + "|" + c.paperColor;
-  for (const c of alive) {
-    const s = sig(c);
-    if (seen.has(s)) continue;
-    seen.add(s);
-    out.push(c);
-    if (out.length >= n) break;
-  }
-  // 潰れガードで全滅した場合の保険
-  if (out.length === 0) {
-    return [...scored].sort((a, b) => b.distinction - a.distinction).slice(0, n);
-  }
-  return out;
-}

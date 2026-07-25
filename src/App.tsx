@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   StencilCanvas,
   type StencilCanvasHandle,
 } from "./components/StencilCanvas";
 import { INKS, PRESETS } from "./presets";
 import { hexToRgb, rgbToLab } from "./lib/color";
-import { getGpuDevice, renderStencilPixels } from "./lib/stencilRenderer";
+import {
+  getGpuDevice,
+  renderStencilPixelsGpuOnly,
+} from "./lib/stencilRenderer";
 import { MAX_INKS } from "./lib/stencilDecomposeGpu";
 import {
   loadImage,
@@ -29,7 +32,10 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { DiscoverDialog } from "./components/DiscoverDialog";
+// Discover はダイアログを開くまで要らない（21KB 相当）。初回描画から外す。
+const DiscoverDialog = lazy(() =>
+  import("./components/DiscoverDialog").then((m) => ({ default: m.DiscoverDialog }))
+);
 import { DISCOVER_FIXED, type Candidate } from "./lib/discover";
 import { usePanZoom } from "./hooks/usePanZoom";
 import { useSettingsHistory } from "./hooks/useSettingsHistory";
@@ -152,6 +158,17 @@ async function saveImageFromCanvas(
 
 const inkEntries = Object.entries(INKS);
 const presetEntries = Object.entries(PRESETS);
+
+/** 与えられたインク列と完全に一致するプリセットのキー（無ければ ""） */
+function matchPresetKey(colors: readonly StencilColor[]): string {
+  const signature = colors.map((c) => c.color.toUpperCase()).join(",");
+  for (const [key, preset] of presetEntries) {
+    if (preset.colors.map((c) => c.color.toUpperCase()).join(",") === signature) {
+      return key;
+    }
+  }
+  return "";
+}
 
 const PAPER_COLORS = [
   { name: "White", color: "#ffffff" },
@@ -506,6 +523,10 @@ function App() {
   const previewRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const panzoom = usePanZoom(previewRef, contentRef);
+  // 画像切り替え effect から呼ぶための最新参照（effect の依存に reset を入れると
+  // 画像と無関係な再生成でリセットが走ってしまう）
+  const panzoomResetRef = useRef(panzoom.reset);
+  panzoomResetRef.current = panzoom.reset;
 
   // モバイル: コントロールパネルの高さ(vh)。上端のハンドルをドラッグで伸縮できる。
   const PANEL_MIN_VH = 22;
@@ -544,6 +565,10 @@ function App() {
   const [imageAspect, setImageAspect] = useState<number | null>(null);
   useEffect(() => {
     setImageAspect(null);
+    // 画像が変わると contentRef の要素ごと差し替わり、変形は inline カスタム
+    // プロパティなので消える。ズーム state だけ残ると「300% と出ているのに
+    // 実際は等倍」になるので、ここで view もリセットして表示と一致させる。
+    panzoomResetRef.current();
     loadImage(imageSrc).then((img) => {
       setImageAspect(img.naturalWidth / img.naturalHeight);
     });
@@ -651,11 +676,11 @@ function App() {
       };
 
       // WebGPU が使えるならそちらで書き出す（高解像度ほど効く）。
-      // 使えない環境では従来どおり Worker 上の CPU 実装で処理し、UI を止めない。
-      const gpuDevice = await getGpuDevice();
-      const pixels = gpuDevice
-        ? await renderStencilPixels(imageData, options)
-        : await new Promise<Uint8ClampedArray>((resolve, reject) => {
+      // 使えない環境や GPU が失敗した場合は Worker 上の CPU 実装で処理し、UI を止めない。
+      // renderStencilPixels は GPU 失敗時にメインスレッドの CPU 実装へ落ちるので、
+      // ここで拾わないと 4x 書き出し（GPU のバッファ上限超え等）で画面が固まる。
+      const renderOnWorker = () =>
+        new Promise<Uint8ClampedArray>((resolve, reject) => {
             const worker = new Worker(
               new URL("./lib/stencil.worker.ts", import.meta.url),
               { type: "module" },
@@ -674,7 +699,20 @@ function App() {
               height: imageData.height,
               options,
             });
-          });
+        });
+
+      const gpuDevice = await getGpuDevice();
+      let pixels: Uint8ClampedArray;
+      if (gpuDevice) {
+        try {
+          pixels = await renderStencilPixelsGpuOnly(imageData, options);
+        } catch (gpuError) {
+          console.warn("[stencil] GPU 書き出しに失敗。Worker で処理します", gpuError);
+          pixels = await renderOnWorker();
+        }
+      } else {
+        pixels = await renderOnWorker();
+      }
 
       const offscreen = document.createElement("canvas");
       offscreen.width = targetWidth;
@@ -793,7 +831,12 @@ function App() {
     transparentBg,
     invert,
   };
-  const { recent, remove: removeRecent } = useRecentSettings(currentSettings);
+  // WebGPU 環境ではサムネ付き履歴（useVisualHistory）を表示するので、
+  // localStorage 版は書き込みごと止める（読まれない履歴を 2.5 秒ごとに書いていた）。
+  const { recent, remove: removeRecent } = useRecentSettings(
+    currentSettings,
+    !gpuAvailable
+  );
   // WebGPU 環境は「見た目つき履歴」（メモリのみ・多め）。CPU は従来の localStorage 履歴。
   const getCanvas = useCallback(() => canvasRef.current?.getCanvas() ?? null, []);
   const { history: visualHistory } = useVisualHistory(
@@ -821,7 +864,9 @@ function App() {
     setNoise(s.noise);
     setTransparentBg(s.transparentBg);
     setInvert(s.invert);
-    setPresetKey("");
+    // 復元した色がちょうどプリセットと一致するならプリセット表示も戻す
+    // （Undo でプリセットへ戻ったのに選択欄が空になるのを防ぐ）。
+    setPresetKey(matchPresetKey(s.colors));
   }, []);
 
   // 設定の Undo/Redo（画像変更で履歴リセット）。ブラウザ標準の
@@ -1222,7 +1267,7 @@ function App() {
                   onValueChange={(v) => setPaperTexture(v as PaperTexture)}
                   disabled={transparentBg}
                 >
-                  <SelectTrigger className="h-9 w-full text-xs">
+                  <SelectTrigger aria-label="Paper texture" className="h-9 w-full text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1238,6 +1283,7 @@ function App() {
                     Texture amount
                   </Label>
                   <Slider
+                    aria-label="Texture strength"
                     value={[paperTextureAmount]}
                     onValueChange={([v]) => setPaperTextureAmount(v)}
                     min={0}
@@ -1273,7 +1319,7 @@ function App() {
             <div className="mb-3">
               <Label className="mb-2 text-xs text-muted-foreground">Preset</Label>
               <Select value={presetKey} onValueChange={handlePresetChange}>
-                <SelectTrigger className="h-9 w-full text-xs">
+                <SelectTrigger className="h-9 w-full text-xs" aria-label="Color preset">
                   <SelectValue placeholder="Select preset..." />
                 </SelectTrigger>
                 <SelectContent>
@@ -1322,6 +1368,7 @@ function App() {
             <div className="mt-3">
               <Label className="mb-2 text-xs text-muted-foreground">Opacity</Label>
               <Slider
+                aria-label="Ink opacity"
                 value={[inkOpacity]}
                 onValueChange={([v]) => setInkOpacity(v)}
                 min={0.1}
@@ -1346,7 +1393,7 @@ function App() {
               <div>
                 <Label className="mb-2 text-xs text-muted-foreground">Separation</Label>
                 <Select value={colorMode} onValueChange={(v) => setColorMode(v as ColorMode)}>
-                  <SelectTrigger className="h-9 w-full text-xs">
+                  <SelectTrigger aria-label="Separation mode" className="h-9 w-full text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1358,7 +1405,7 @@ function App() {
               <div>
                 <Label className="mb-2 text-xs text-muted-foreground">Mode</Label>
                 <Select value={halftoneMode} onValueChange={(v) => setHalftoneMode(v as HalftoneMode)}>
-                  <SelectTrigger className="h-9 w-full text-xs">
+                  <SelectTrigger aria-label="Halftone mode" className="h-9 w-full text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1370,6 +1417,7 @@ function App() {
               <div>
                 <Label className="mb-2 text-xs text-muted-foreground">Dot Size</Label>
                 <Slider
+                  aria-label="Dot size"
                   value={[dotSize]}
                   onValueChange={([v]) => setDotSize(v)}
                   min={0.5}
@@ -1384,6 +1432,7 @@ function App() {
               <div>
                 <Label className="mb-2 text-xs text-muted-foreground">Density</Label>
                 <Slider
+                  aria-label="Density"
                   value={[density]}
                   onValueChange={([v]) => setDensity(v)}
                   min={0.5}
@@ -1402,6 +1451,7 @@ function App() {
                   Separation strength
                 </Label>
                 <Slider
+                  aria-label="Separation strength"
                   value={[gamutCutoff]}
                   onValueChange={([v]) => setGamutCutoff(v)}
                   min={0}
@@ -1420,6 +1470,7 @@ function App() {
                   Black generation
                 </Label>
                 <Slider
+                  aria-label="Black generation"
                   value={[blackGeneration]}
                   onValueChange={([v]) => setBlackGeneration(v)}
                   min={0}
@@ -1443,6 +1494,7 @@ function App() {
               <div>
                 <Label className="mb-2 text-xs text-muted-foreground">Misregistration</Label>
                 <Slider
+                  aria-label="Misregistration"
                   value={[misregistration]}
                   onValueChange={([v]) => setMisregistration(v)}
                   min={0}
@@ -1457,6 +1509,7 @@ function App() {
               <div>
                 <Label className="mb-2 text-xs text-muted-foreground">Noise</Label>
                 <Slider
+                  aria-label="Noise"
                   value={[noise]}
                   onValueChange={([v]) => setNoise(v)}
                   min={0}
@@ -1473,6 +1526,7 @@ function App() {
                   Highlight cutoff
                 </Label>
                 <Slider
+                  aria-label="Highlight cutoff"
                   value={[highlightCutoff]}
                   onValueChange={([v]) => setHighlightCutoff(v)}
                   min={0}
@@ -1547,7 +1601,7 @@ function App() {
               </span>
             )}
             <Select value={downloadScale} onValueChange={setDownloadScale}>
-              <SelectTrigger className="h-9 w-28 text-xs">
+              <SelectTrigger className="h-9 w-28 text-xs" aria-label="Export resolution">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1589,12 +1643,16 @@ function App() {
         </a>
       </footer>
 
-      <DiscoverDialog
-        open={discoverOpen}
-        onOpenChange={setDiscoverOpen}
-        imageSrc={imageSrc}
-        onApply={applyCandidate}
-      />
+      {discoverOpen && (
+        <Suspense fallback={null}>
+          <DiscoverDialog
+            open={discoverOpen}
+            onOpenChange={setDiscoverOpen}
+            imageSrc={imageSrc}
+            onApply={applyCandidate}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

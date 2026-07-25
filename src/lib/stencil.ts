@@ -1074,25 +1074,6 @@ export function computeStencil(
 }
 
 /**
- * メインのステンシル印刷処理。
- * ソースの ImageData を受け取り、ステンシル印刷風に加工した結果を canvas に描画する。
- */
-export function processStencil(
-  sourceData: ImageData,
-  canvas: HTMLCanvasElement,
-  options: StencilOptions
-): void {
-  const { width, height } = sourceData;
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d")!;
-  const pixels = computeStencil(sourceData, options);
-  const outputData = ctx.createImageData(width, height);
-  outputData.data.set(pixels);
-  ctx.putImageData(outputData, 0, 0);
-}
-
-/**
  * 画像を読み込んで ImageData を取得する
  */
 export function loadImage(src: string): Promise<HTMLImageElement> {
