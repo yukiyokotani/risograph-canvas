@@ -17,7 +17,6 @@ import {
   type StencilColor,
   type StencilOptions,
   type HalftoneMode,
-  type ColorMode,
   type PaperTexture,
 } from "./lib/stencil";
 import {
@@ -172,11 +171,10 @@ function matchPresetKey(colors: readonly StencilColor[]): string {
 
 /** Halftone セクションの既定値（state の初期値とリセットで共有する） */
 const HALFTONE_DEFAULTS = {
-  colorMode: "natural" as ColorMode,
+  separation: 0,
   halftoneMode: "am" as HalftoneMode,
   dotSize: 0.5,
   density: 1.5,
-  gamutCutoff: 0.5,
   blackGeneration: 0.7,
   highlightCutoff: 0,
 };
@@ -208,7 +206,7 @@ const guide = {
       },
       {
         heading: "Separation",
-        body: "How the image is split into ink layers.\n• Natural — reproduces the original colors. Saturated colors the inks can't mix (e.g. green with blue+pink) resolve to the nearest single ink instead of a muddy overlap, keeping them clean and bright. Best for photographic gradients.\n• Bold — punchier, high-contrast separation for a graphic look (see Separation strength).",
+        body: "One slider from faithful to graphic.\n• At 0 the image is reproduced as closely as the inks allow. Saturated colors the inks can't mix (e.g. green with blue+pink) resolve toward the nearest clean tone instead of a muddy overlap. Best for photographs.\n• Turning it up pushes those colors harder onto a single ink and raises the contrast of each screen, giving a punchy, poster-like look.\nEverything in between is available, so you can stop wherever the picture still reads.",
       },
       {
         heading: "Halftone Mode",
@@ -221,10 +219,6 @@ const guide = {
       {
         heading: "Density",
         body: "Below 1, this simply thins the ink — the whole print gets lighter.\n\nAbove 1 it works as tonal punch rather than a flat boost: midtones pivot, so dark areas close up toward solid while light areas open up. A flat boost would push every tone into the range where neighbouring dots merge, and whole areas of different tone would flatten into one solid patch (most visible with a large Dot Size). Pivoting keeps the deepest tone near solid while the tone just below it stays as distinct, large dots — so you get heavy dots and still read the boundaries.",
-      },
-      {
-        heading: "Separation strength",
-        body: "Only active with Bold. Sets how hard out-of-gamut colors snap toward a single ink instead of mixing. Higher values give cleaner, more posterized single-ink areas; lower values keep more two-ink blending. Neutrals, in-gamut colors, and deep shadows always keep both inks. No effect in Natural.",
       },
       {
         heading: "Black generation",
@@ -277,7 +271,7 @@ const guide = {
       },
       {
         heading: "色分解 (Separation)",
-        body: "画像をインクの色版にどう分解するかを制御します。\n• Natural — 元の色を忠実に再現します。インクで混色できない鮮やかな色（例: 青+ピンクでの緑）は、濁った重なりにせず最も近い単色インクへ寄せて、澄んだ発色を保ちます。写真的なグラデーション向き。\n• Bold — コントラストの高いグラフィカルな色分離（下の Separation strength 参照）。",
+        body: "「忠実 ⇄ グラフィック」を 1 本のスライダーで連続に変えます。\n• 0 では、使えるインクの範囲でできるだけ元の色を再現します。インクで混色できない鮮やかな色（例: 青+ピンクでの緑）は、濁った重なりにせず澄んだ色へ寄せます。写真向き。\n• 上げるほど、そうした色を単色へ強く寄せ、各色版のコントラストも立てて、ポスターのような大胆な絵になります。\n途中の任意の強さを選べるので、絵が読めるギリギリで止められます。",
       },
       {
         heading: "ハーフトーンモード",
@@ -290,10 +284,6 @@ const guide = {
       {
         heading: "濃度 (Density)",
         body: "1 未満はインク量そのものを薄くします（全体が淡くなります）。\n\n1 を超える領域では「一律に濃くする」のではなく、中間調を軸にトーンを立てます（濃い側は詰まり、薄い側は抜ける）。一律に濃くすると全部のトーンが「隣の点と融合する濃さ」まで押し上げられ、色や明るさの違う面同士が同じベタ面に潰れてしまいます（Dot Size が大きいほど顕著）。中間調を軸にすることで、最暗部だけがベタ近くまで詰まり、その一段下は大きな点のまま残るので、点の力強さと境界の見分けやすさが両立します。",
-      },
-      {
-        heading: "分離の強さ (Separation strength)",
-        body: "Bold でのみ有効です。ガモット外の色をどれだけ強く単色へ寄せる（混色させない）かを決めます。値を大きくするほどクリーンでポスター調の単色域になり、小さいほど2色の混色を残します。中立色・ガモット内の色・深い影は常に2色を保ちます。Natural では効果はありません。",
       },
       {
         heading: "黒生成 (Black generation)",
@@ -560,8 +550,7 @@ function App() {
   const [transparentBg, setTransparentBg] = useState(false);
   const [invert, setInvert] = useState(false);
   const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>(HALFTONE_DEFAULTS.halftoneMode);
-  const [colorMode, setColorMode] = useState<ColorMode>(HALFTONE_DEFAULTS.colorMode);
-  const [gamutCutoff, setGamutCutoff] = useState(HALFTONE_DEFAULTS.gamutCutoff);
+  const [separation, setSeparation] = useState(HALFTONE_DEFAULTS.separation);
   const [blackGeneration, setBlackGeneration] = useState(HALFTONE_DEFAULTS.blackGeneration);
   const [highlightCutoff, setHighlightCutoff] = useState(HALFTONE_DEFAULTS.highlightCutoff);
   const [paperTexture, setPaperTexture] = useState<PaperTexture>("none");
@@ -713,8 +702,7 @@ function App() {
         inkOpacity,
         paperColor,
         halftoneMode,
-        colorMode,
-        gamutThreshold: gamutCutoff,
+        separation,
         blackGeneration,
         highlightCutoff,
         paperTexture,
@@ -795,20 +783,18 @@ function App() {
 
   /** Halftone セクションだけを既定値に戻す */
   const halftoneIsDefault =
-    colorMode === HALFTONE_DEFAULTS.colorMode &&
+    separation === HALFTONE_DEFAULTS.separation &&
     halftoneMode === HALFTONE_DEFAULTS.halftoneMode &&
     dotSize === HALFTONE_DEFAULTS.dotSize &&
     density === HALFTONE_DEFAULTS.density &&
-    gamutCutoff === HALFTONE_DEFAULTS.gamutCutoff &&
     blackGeneration === HALFTONE_DEFAULTS.blackGeneration &&
     highlightCutoff === HALFTONE_DEFAULTS.highlightCutoff;
 
   const resetHalftone = () => {
-    setColorMode(HALFTONE_DEFAULTS.colorMode);
+    setSeparation(HALFTONE_DEFAULTS.separation);
     setHalftoneMode(HALFTONE_DEFAULTS.halftoneMode);
     setDotSize(HALFTONE_DEFAULTS.dotSize);
     setDensity(HALFTONE_DEFAULTS.density);
-    setGamutCutoff(HALFTONE_DEFAULTS.gamutCutoff);
     setBlackGeneration(HALFTONE_DEFAULTS.blackGeneration);
     setHighlightCutoff(HALFTONE_DEFAULTS.highlightCutoff);
   };
@@ -839,8 +825,7 @@ function App() {
     setDotSize(pick([2, 2.5, 3, 3.5, 4, 5, 6]));
     setDensity(pick([1, 1.1, 1.2, 1.3, 1.4]));
     setHalftoneMode("am");
-    setColorMode(pick<ColorMode>(["natural", "bold"]));
-    setGamutCutoff(pick([0.3, 0.5, 0.7]));
+    setSeparation(pick([0, 0, 0.3, 0.6, 1]));
     setPaperTexture(pick<PaperTexture>(["felt", "fiber", "none"]));
     setPaperTextureAmount(pick([0.3, 0.5, 0.7]));
   };
@@ -856,8 +841,7 @@ function App() {
     setMisregistration(cand.misregistration);
     setHalftoneMode(cand.halftoneMode);
     setPaperTexture(cand.paperTexture);
-    setColorMode(DISCOVER_FIXED.colorMode);
-    setGamutCutoff(DISCOVER_FIXED.gamutThreshold);
+    setSeparation(DISCOVER_FIXED.separation);
     setBlackGeneration(DISCOVER_FIXED.blackGeneration);
     setHighlightCutoff(cand.highlightCutoff);
     setNoise(DISCOVER_FIXED.noise);
@@ -891,8 +875,7 @@ function App() {
     inkOpacity,
     paperColor,
     halftoneMode,
-    colorMode,
-    gamutCutoff,
+    separation,
     blackGeneration,
     highlightCutoff,
     paperTexture,
@@ -925,8 +908,7 @@ function App() {
     setInkOpacity(s.inkOpacity);
     setPaperColor(s.paperColor);
     setHalftoneMode(s.halftoneMode);
-    setColorMode(s.colorMode);
-    setGamutCutoff(s.gamutCutoff);
+    setSeparation(s.separation);
     setBlackGeneration(s.blackGeneration ?? 0.7);
     setHighlightCutoff(s.highlightCutoff);
     setPaperTexture(s.paperTexture);
@@ -1054,8 +1036,7 @@ function App() {
               inkOpacity={inkOpacity}
               paperColor={paperColor}
               halftoneMode={halftoneMode}
-              colorMode={colorMode}
-              gamutThreshold={gamutCutoff}
+              separation={separation}
               blackGeneration={blackGeneration}
               highlightCutoff={highlightCutoff}
               paperTexture={paperTexture}
@@ -1474,18 +1455,6 @@ function App() {
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 lg:grid-cols-2">
               <div>
-                <Label className="mb-2 text-xs text-muted-foreground">Separation</Label>
-                <Select value={colorMode} onValueChange={(v) => setColorMode(v as ColorMode)}>
-                  <SelectTrigger aria-label="Separation mode" className="h-9 w-full text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="natural" className="text-xs">Natural</SelectItem>
-                    <SelectItem value="bold" className="text-xs">Bold</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
                 <Label className="mb-2 text-xs text-muted-foreground">Mode</Label>
                 <Select value={halftoneMode} onValueChange={(v) => setHalftoneMode(v as HalftoneMode)}>
                   <SelectTrigger aria-label="Halftone mode" className="h-9 w-full text-xs">
@@ -1528,25 +1497,23 @@ function App() {
                 </span>
               </div>
             </div>
-            {colorMode === "bold" && (
-              <div className="mt-4">
-                <Label className="mb-2 text-xs text-muted-foreground">
-                  Separation strength
-                </Label>
-                <Slider
-                  aria-label="Separation strength"
-                  value={[gamutCutoff]}
-                  onValueChange={([v]) => setGamutCutoff(v)}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  className="mt-2"
-                />
-                <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
-                  {Math.round(gamutCutoff * 100)}%
-                </span>
+            <div className="mt-4">
+              <Label className="mb-2 text-xs text-muted-foreground">Separation</Label>
+              <Slider
+                aria-label="Separation"
+                value={[separation]}
+                onValueChange={([v]) => setSeparation(v)}
+                min={0}
+                max={1}
+                step={0.05}
+                className="mt-2"
+              />
+              <div className="mt-1 flex justify-between font-mono text-[11px] text-muted-foreground">
+                <span>Faithful</span>
+                <span>{Math.round(separation * 100)}%</span>
+                <span>Graphic</span>
               </div>
-            )}
+            </div>
             {hasNeutralInk && (
               <div className="mt-4">
                 <Label className="mb-2 text-xs text-muted-foreground">

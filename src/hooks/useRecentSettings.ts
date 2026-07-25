@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   StencilColor,
   HalftoneMode,
-  ColorMode,
   PaperTexture,
 } from "../lib/stencil";
 
@@ -15,8 +14,8 @@ export interface StencilSettings {
   inkOpacity: number;
   paperColor: string;
   halftoneMode: HalftoneMode;
-  colorMode: ColorMode;
-  gamutCutoff: number;
+  /** 色分解の強さ 0–1（0=忠実 / 1=グラフィック） */
+  separation: number;
   blackGeneration?: number;
   highlightCutoff: number;
   paperTexture: PaperTexture;

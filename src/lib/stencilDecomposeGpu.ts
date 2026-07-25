@@ -31,7 +31,7 @@ struct Params {
   useGcr: u32,
   invert: u32,
 
-  bold: u32,
+  snapAmount: f32,
   snapEnabled: u32,
   cutoffEnabled: u32,
   twoInkFit: u32,
@@ -44,7 +44,7 @@ struct Params {
   paperR: f32,
   paperG: f32,
   paperB: f32,
-  _padding1: f32,
+  contrastAmount: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -312,7 +312,7 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
     if (offGamut > 0.0) {
       let saturationGate = smoothstepCpu(chromaLow, chromaHigh, targetChroma);
       let darkGate = smoothstepCpu(18.0, 40.0, targetLab.x);
-      let snap = offGamut * saturationGate * darkGate * scale;
+      let snap = offGamut * saturationGate * darkGate * scale * params.snapAmount;
 
       if (snap >= 0.02) {
         var mixedR = 1.0;
@@ -385,7 +385,7 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
     }
   }
 
-  if (params.bold != 0u) {
+  if (params.contrastAmount > 0.0) {
     let gain = 6.0;
     let middle = 0.35;
     let sigmoid0 = 1.0 / (1.0 + exp(gain * middle));
@@ -397,7 +397,9 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
         densities[i] = 0.0;
       } else {
         let sigmoid = 1.0 / (1.0 + exp(-gain * (value - middle)));
-        densities[i] = clamp((sigmoid - sigmoid0) / sigmoidRange, 0.0, 1.0);
+        let bold = clamp((sigmoid - sigmoid0) / sigmoidRange, 0.0, 1.0);
+        // amount=0 で恒等、1 で従来の Bold。CPU と同じ線形補間。
+        densities[i] = value + (bold - value) * params.contrastAmount;
       }
     }
   }
@@ -512,10 +514,9 @@ export async function decomposeToGpuBuffer(
   const inkRgbs = colors.map((color) => hexToRgb(color.color));
   const paper = options.paperColor ? hexToRgb(options.paperColor) : DEFAULT_PAPER;
   const inkOpacity = options.inkOpacity ?? 0.85;
-  const gamutThreshold = options.gamutThreshold ?? 0.5;
   const blackGeneration = options.blackGeneration ?? 0.7;
   const highlightCutoff = options.highlightCutoff ?? 0;
-  const bold = options.colorMode === "bold";
+  const separation = Math.max(0, Math.min(1, options.separation ?? 0));
 
   const isLowAbsorption = inkRgbs.map((ink) => {
     const red = (255 - ink.r) / 255;
@@ -633,20 +634,24 @@ export async function decomposeToGpuBuffer(
   params.setUint32(20, useGcr ? kIndex : 0, true);
   params.setUint32(24, useGcr ? 1 : 0, true);
   params.setUint32(28, options.invert ? 1 : 0, true);
-  params.setUint32(32, bold ? 1 : 0, true);
+  const twoInkFitCandidate = inkCount === 2 && decompIndexMap.length === 2;
+  // snap の効き量: 2色はフィットが土台なので separation そのもの、3色以上は従来どおり常時
+  params.setFloat32(32, twoInkFitCandidate ? separation : 1, true);
   // 2色 × Natural は乗算モデルフィットを使い、従来の snap は無効化する。
-  const twoInkFit = !bold && inkCount === 2 && decompIndexMap.length === 2;
-  params.setUint32(36, !twoInkFit && decompIndexMap.length >= 2 ? 1 : 0, true);
+  const twoInkFit = twoInkFitCandidate;
+  const snapEnabled =
+    decompIndexMap.length >= 2 && (!twoInkFit || separation > 0);
+  params.setUint32(36, snapEnabled ? 1 : 0, true);
   params.setUint32(40, highlightCutoff > 0 && highlightCutoff < 1 ? 1 : 0, true);
   params.setUint32(44, twoInkFit ? 1 : 0, true);
   params.setFloat32(48, inkOpacity, true);
-  params.setFloat32(52, bold ? 0.5 + gamutThreshold : 0, true);
+  params.setFloat32(52, twoInkFit ? separation : separation * 1.5, true);
   params.setFloat32(56, blackGeneration, true);
   params.setFloat32(60, highlightCutoff, true);
   params.setFloat32(64, paper.r, true);
   params.setFloat32(68, paper.g, true);
   params.setFloat32(72, paper.b, true);
-  params.setFloat32(76, 0, true);
+  params.setFloat32(76, separation, true);
   paramsBuffer.unmap();
 
   const sourceBuffer = device.createBuffer({

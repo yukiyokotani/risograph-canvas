@@ -59,7 +59,7 @@ function densityKey(source: ImageDataLike, o: StencilOptions): string {
   return JSON.stringify([
     sourceId(source), source.width, source.height,
     o.colors.map((c) => `${c.color}:${c.angle ?? ""}`),
-    o.colorMode, o.gamutThreshold, o.blackGeneration, o.highlightCutoff,
+    o.separation, o.blackGeneration, o.highlightCutoff,
     o.invert, o.inkOpacity, o.paperColor,
   ]);
 }

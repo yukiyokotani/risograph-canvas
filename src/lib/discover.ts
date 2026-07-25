@@ -19,8 +19,8 @@ import { hexToRgb, rgbToLab } from "./color";
  * サムネの見た目と適用後プレビューを一致させる。
  */
 export const DISCOVER_FIXED = {
-  colorMode: "natural" as const,
-  gamutThreshold: 0.5,
+  // 0 = 忠実な色分解（元の Natural）
+  separation: 0,
   blackGeneration: 0.7,
   noise: 0,
   // 紙テクスチャは見栄えにほぼ効かないのでランダムに振らず固定（none）
