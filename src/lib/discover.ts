@@ -10,7 +10,9 @@
  *
  * 採点ロジックは experiments/discover での検証結果を移植したもの。
  */
-import type { StencilColor, PaperTexture } from "./stencil";
+import type { StencilColor, PaperTexture, HalftoneMode } from "./stencil";
+import type { ToneCurves } from "./curve";
+import type { StencilSettings } from "./settings";
 import { INKS, PRESETS } from "../presets";
 import { hexToRgb, rgbToLab } from "./color";
 
@@ -19,8 +21,6 @@ import { hexToRgb, rgbToLab } from "./color";
  * サムネの見た目と適用後プレビューを一致させる。
  */
 export const DISCOVER_FIXED = {
-  // 0 = 忠実な色分解（元の Natural）
-  separation: 0,
   blackGeneration: 0.7,
   noise: 0,
   // 紙テクスチャは見栄えにほぼ効かないのでランダムに振らず固定（none）
@@ -46,7 +46,13 @@ export const MIN_VARIATION = 8;
 export const MAX_PER_PALETTE = 3;
 
 // --- 候補の型 ---
-export type DiscoverCategory = "curated" | "duo" | "tri" | "single" | "surprise";
+export type DiscoverCategory =
+  | "current"
+  | "curated"
+  | "duo"
+  | "tri"
+  | "single"
+  | "surprise";
 
 /** Discover が振る「制御対象パラメータ」。適用時はこれらを丸ごと state へ反映する。 */
 export interface Candidate {
@@ -56,13 +62,26 @@ export interface Candidate {
   colors: StencilColor[];
   paperColor: string;
   invert: boolean;
+  /** 色分解の強さ 0–1（0=忠実 / 1=グラフィック） */
+  separation: number;
   dotSize: number;
   density: number;
   inkOpacity: number;
   misregistration: number;
   highlightCutoff: number;
   paperTexture: PaperTexture;
-  halftoneMode: "am";
+  halftoneMode: HalftoneMode;
+  /**
+   * 生成候補は DISCOVER_FIXED を使うので持たない。「今の表示」から作る候補
+   * （と、そこから派生した similar）だけが実際の設定値を持ち、サムネと
+   * メイン画面の見た目を一致させる。
+   */
+  blackGeneration?: number;
+  noise?: number;
+  paperTextureAmount?: number;
+  transparentBg?: boolean;
+  /** 反転以外のトーンカーブ。持っていれば invert より優先。 */
+  curves?: ToneCurves;
 }
 
 export interface ScoredCandidate extends Candidate {
@@ -240,6 +259,19 @@ const DOT_SIZES = [2, 3, 4, 5, 6];
 const DENSITIES = [0.9, 1.1, 1.3, 1.5];
 const OPACITIES = [0.65, 0.75, 0.85, 0.95];
 
+/**
+ * 色分解の強さの抽選。写真は忠実側（0 付近）が当たりやすい一方、思い切って
+ * グラフィックに倒した絵も Discover の面白さなので、忠実寄りに重みを置きつつ
+ * 全域から引く。
+ */
+function pickSeparation(rng: () => number): number {
+  const r = rng();
+  if (r < 0.4) return 0;
+  if (r < 0.65) return roundTo(0.05, rangePick(rng, 0.15, 0.4));
+  if (r < 0.85) return roundTo(0.05, rangePick(rng, 0.45, 0.7));
+  return roundTo(0.05, rangePick(rng, 0.75, 1));
+}
+
 function randomParams(rng: () => number) {
   const dotSize = pick(rng, DOT_SIZES);
   const density = pick(rng, DENSITIES);
@@ -248,7 +280,44 @@ function randomParams(rng: () => number) {
   // ハイライトのクリップは基本 0、たまに軽く効かせる
   const highlightCutoff = rng() < 0.7 ? 0 : roundTo(0.01, rangePick(rng, 0.03, 0.15));
   // paperTexture は固定（DISCOVER_FIXED）なのでここでは振らない
-  return { dotSize, density, inkOpacity, misregistration, highlightCutoff, halftoneMode: "am" as const };
+  return {
+    separation: pickSeparation(rng),
+    dotSize,
+    density,
+    inkOpacity,
+    misregistration,
+    highlightCutoff,
+    halftoneMode: "am" as const,
+  };
+}
+
+/**
+ * 「今メイン画面に出ている見た目」を Discover の先頭候補にする。
+ * 生成候補と違い固定値を使わず、実際の設定をそのまま持たせる
+ * （サムネが今の表示と一致し、そこからの similar が意味を持つ）。
+ */
+export function candidateFromSettings(s: StencilSettings): Candidate {
+  return {
+    id: "current",
+    label: "Current",
+    category: "current",
+    colors: s.colors,
+    paperColor: s.paperColor,
+    invert: false,
+    separation: s.separation,
+    dotSize: s.dotSize,
+    density: s.density,
+    inkOpacity: s.inkOpacity,
+    misregistration: s.misregistration,
+    highlightCutoff: s.highlightCutoff,
+    paperTexture: s.paperTexture,
+    halftoneMode: s.halftoneMode,
+    blackGeneration: s.blackGeneration,
+    noise: s.noise,
+    paperTextureAmount: s.paperTextureAmount,
+    transparentBg: s.transparentBg,
+    curves: s.curves,
+  };
 }
 
 /** 同じパレット（＋紙・反転）かどうかの判定キー。同一パレットの出過ぎを抑えるのに使う。 */
@@ -262,7 +331,7 @@ export function paletteKey(c: Candidate): string {
  * 点設定まで同じものだけを重複として弾く）。
  */
 export function candidateSignature(c: Candidate): string {
-  return `${paletteKey(c)}|${c.dotSize}|${c.density}|${c.inkOpacity}`;
+  return `${paletteKey(c)}|${c.separation}|${c.dotSize}|${c.density}|${c.inkOpacity}`;
 }
 
 /** StencilColor（アプリの色）から対応する PoolInk を引く（色文字列で照合）。 */
@@ -376,16 +445,30 @@ export function mutate(base: Candidate, seed: number, count = 24): Candidate[] {
     }
   }
 
+  // 生成候補は dotSize 2–6 / density 0.9–1.5 だが、「今の表示」を base にすると
+  // その外側（例: 0.5px の細かい網点）から始まる。base 側へ範囲を広げ、
+  // 刻みも base に合わせて縮める（固定 ±1px では細かい網点で差が大きすぎる）。
+  const dotStep = base.dotSize <= 2 ? 0.5 : 1;
+  const dotLo = Math.min(2, base.dotSize);
+  const dotHi = Math.max(6, base.dotSize);
+  const densLo = Math.min(0.9, base.density);
+  const densHi = Math.max(1.5, base.density);
+
   const pool = base.category === "surprise" ? FLUOR : VIVID;
   const out: Candidate[] = [];
   for (let i = 0; i < count; i++) {
     const [dDot, dDens] = grid[i % grid.length];
     const round = Math.floor(i / grid.length);
-    const dotSize = clamp(2, 6, base.dotSize + dDot);
-    const density = clamp(0.9, 1.5, roundTo(0.05, base.density + dDens));
+    const dotSize = clamp(dotLo, dotHi, roundTo(0.5, base.dotSize + dDot * dotStep));
+    const density = clamp(densLo, densHi, roundTo(0.05, base.density + dDens));
     // 格子を 2 周目以降に使うときは不透明度をずらして同じ見た目にならないようにする
     const opacityShift = round === 0 ? 0 : round % 2 === 1 ? 0.1 : -0.1;
     const inkOpacity = clamp(0.6, 0.95, roundTo(0.05, base.inkOpacity + opacityShift));
+    // 色分解の強さも近傍で振る（絵の印象が最も変わるので、similar の主役の一つ）
+    const separation =
+      i % 4 === 3
+        ? pickSeparation(rng)
+        : clamp(0, 1, roundTo(0.05, base.separation + rangePick(rng, -0.25, 0.25)));
 
     let colors = base.colors;
     if (i % 3 === 2) {
@@ -415,6 +498,7 @@ export function mutate(base: Candidate, seed: number, count = 24): Candidate[] {
       id: `m${idSeq++}`,
       label: label(colors),
       colors,
+      separation,
       dotSize,
       density,
       inkOpacity,

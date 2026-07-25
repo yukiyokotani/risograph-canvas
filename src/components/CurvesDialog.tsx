@@ -11,6 +11,7 @@ import {
   type ToneCurves,
 } from "../lib/curve";
 import { Slider } from "./ui/slider";
+import { RotateCcw } from "lucide-react";
 
 type ChannelKey = "rgb" | "r" | "g" | "b";
 
@@ -89,9 +90,9 @@ export function CurvesIcon({ className }: { className?: string }) {
       className={className}
       aria-hidden="true"
     >
-      <path d="M7.7 17.6C11 15.6 13 8.4 16.3 6.4" />
-      <circle cx="4.9" cy="19.3" r="2.4" fill="none" />
-      <circle cx="19.1" cy="4.7" r="2.4" fill="none" />
+      <path d="M7.7 17.3C11 15.4 13 8.6 16.3 6.7" />
+      <circle cx="4.9" cy="18.9" r="2.4" fill="none" />
+      <circle cx="19.1" cy="5.1" r="2.4" fill="none" />
     </svg>
   );
 }
@@ -193,16 +194,15 @@ export function CurvesDialog({
     return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
   };
 
-  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    const g = eventToGraph(e);
+  /** 表示ピクセルで HIT 以内の点を探す。無ければ -1。 */
+  const hitTest = (g: CurvePoint): number => {
     const rect = svgRef.current!.getBoundingClientRect();
     const scale = rect.width / VIEW;
-    // 近くの点をつかむ。無ければ新しく足す。
+    const gs = toSvg(g);
     let hit = -1;
     let best = HIT * HIT;
     points.forEach((p, i) => {
       const s = toSvg(p);
-      const gs = toSvg(g);
       const dx = (s.x - gs.x) * scale;
       const dy = (s.y - gs.y) * scale;
       const d2 = dx * dx + dy * dy;
@@ -211,6 +211,13 @@ export function CurvesDialog({
         hit = i;
       }
     });
+    return hit;
+  };
+
+  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    const g = eventToGraph(e);
+    // 近くの点をつかむ。無ければ新しく足す。
+    let hit = hitTest(g);
     if (hit < 0) {
       const next = [...points, g].sort((a, b) => a.x - b.x);
       hit = next.findIndex((p) => p === g);
@@ -241,6 +248,15 @@ export function CurvesDialog({
   const removePoint = (index: number) => {
     if (index === 0 || index === points.length - 1) return;
     setPoints(points.filter((_, i) => i !== index));
+  };
+
+  // ポインタキャプチャ中は click/dblclick が svg 側に飛ぶので、点の要素に
+  // ハンドラを付けても呼ばれない。svg で受けて自前で当たり判定する。
+  const onDoubleClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    const hit = hitTest(eventToGraph(e));
+    if (hit < 0) return;
+    removePoint(hit);
+    setDragIndex(null);
   };
 
   // 開いている間は Delete で選択中の点を消せるようにする
@@ -302,12 +318,13 @@ export function CurvesDialog({
           <svg
             ref={svgRef}
             viewBox={`0 0 ${VIEW} ${VIEW}`}
-            className="w-full touch-none rounded-md border bg-card"
+            className="w-full touch-none select-none rounded-md border bg-card"
             style={{ aspectRatio: "1 / 1", color: "var(--foreground)" }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
+            onDoubleClick={onDoubleClick}
           >
             {histPaths && (
               <g>
@@ -384,7 +401,7 @@ export function CurvesDialog({
             {points.map((p, i) => {
               const s = toSvg(p);
               return (
-                <g key={i} onDoubleClick={() => removePoint(i)}>
+                <g key={i}>
                   <circle
                     cx={s.x}
                     cy={s.y}
@@ -398,7 +415,7 @@ export function CurvesDialog({
               );
             })}
           </svg>
-          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-2 select-none text-[11px] leading-relaxed text-muted-foreground">
             Drag to bend the curve. Click empty space to add a point,
             double-click a point to remove it.
           </p>
@@ -446,9 +463,9 @@ export function CurvesDialog({
                 amounts: FULL_AMOUNTS,
               })
             }
-            className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
-            Reset all channels
+            <RotateCcw className="h-3 w-3" /> Reset all channels
           </button>
           <Button
             variant="outline"

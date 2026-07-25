@@ -199,7 +199,7 @@ const guide = {
     sections: [
       {
         heading: "Image",
-        body: "Choose an image from your device. Everything is processed locally in your browser — nothing is uploaded.\n\nCurves opens a tone-curve editor that shapes the photo before it is separated into inks — the same stage as Invert tones. Drag the line to lift or crush parts of the tonal range, per RGB or per channel; a dot on the button means a curve is active. The curve always stays monotonic, so tones never fold back on themselves.\n\nInvert tones flips the input image's tones (light ↔ dark) before printing. Useful when printing a light ink (e.g. white) on dark paper, so bright areas become heavily inked.",
+        body: "Choose an image from your device. Everything is processed locally in your browser — nothing is uploaded.\n\nCurves opens a tone-curve editor that shapes the photo before it is separated into inks. Drag the line to lift or crush parts of the tonal range, per RGB or per channel; a dot on the button means a curve is active. The curve always stays monotonic, so tones never fold back on themselves.\n\nInverting the image is one of the presets — handy when printing a light ink (e.g. white) on dark paper, so bright areas become heavily inked. Amount fades the whole curve in and out, per channel.",
       },
       {
         heading: "Paper",
@@ -223,7 +223,7 @@ const guide = {
       },
       {
         heading: "Density",
-        body: "Below 1, this simply thins the ink — the whole print gets lighter.\n\nAbove 1 it works as tonal punch rather than a flat boost: midtones pivot, so dark areas close up toward solid while light areas open up. A flat boost would push every tone into the range where neighbouring dots merge, and whole areas of different tone would flatten into one solid patch (most visible with a large Dot Size). Pivoting keeps the deepest tone near solid while the tone just below it stays as distinct, large dots — so you get heavy dots and still read the boundaries.",
+        body: "Overall ink amount. Below 1 it simply thins the ink and the whole print gets lighter.\n\nAbove 1 it adds ink like a flat boost would, but the top of the range approaches solid instead of hitting a hard ceiling. A hard ceiling pushes every dark tone into the range where neighbouring dots merge, so areas of different tone flatten into one solid patch (most visible with a large Dot Size). Easing into the ceiling keeps the deepest tone near solid while the tone just below it stays as distinct, large dots — heavy dots, and you can still read the boundaries.",
       },
       {
         heading: "Black generation",
@@ -243,7 +243,7 @@ const guide = {
       },
       {
         heading: "Toolbar",
-        body: "At the top of the panel:\n• History (clock) — reopen recently used settings and apply one again.\n• Shuffle — randomize the settings for quick exploration.\n• Guide (i) — this help.\n• Theme — toggle light / dark.",
+        body: "At the top of the panel:\n• History (clock) — thumbnails of looks you have already tried in this session; click one to go back to it. Kept in memory only, so it clears when you reload.\n• Discover (shuffle) — opens a grid of generated palette and dot combinations rendered from your photo. Pick one to apply it, and use the row underneath to explore variations of it. Without WebGPU this simply shuffles the settings instead.\n• Guide (i) — this help.\n• Theme — toggle light / dark.",
       },
       {
         heading: "Undo / Redo & preview",
@@ -264,7 +264,7 @@ const guide = {
     sections: [
       {
         heading: "画像",
-        body: "デバイスから画像を選択します。処理はすべてブラウザ内で完結し、画像がアップロードされることはありません。\n\n「Curves」はトーンカーブの編集です。色分解の手前（Invert tones と同じ段）で写真の階調を整えます。線をドラッグして特定の明るさを持ち上げたり潰したりでき、RGB 一括と R/G/B 別を切り替えられます。ボタンの点は「カーブが効いている」印です。曲線は常に単調なので、階調が逆転することはありません。\n\n「Invert tones」は入力画像の階調（明↔暗）を反転してから印刷します。暗い紙に明るいインク（白など）で刷るときに便利で、元画像の明るい部分にインクが多く乗ります。",
+        body: "デバイスから画像を選択します。処理はすべてブラウザ内で完結し、画像がアップロードされることはありません。\n\n「Curves」はトーンカーブの編集です。色分解の手前で写真の階調を整えます。線をドラッグして特定の明るさを持ち上げたり潰したりでき、RGB 一括と R/G/B 別を切り替えられます。ボタンの点は「カーブが効いている」印です。曲線は常に単調なので、階調が逆転することはありません。\n\n階調の反転もプリセットの 1 つとして用意しています（暗い紙に白などの明るいインクで刷るときに便利で、元画像の明るい部分にインクが多く乗ります）。Amount はカーブ全体の効き具合をチャンネルごとに 0〜100% で調整します。",
       },
       {
         heading: "用紙 (Paper)",
@@ -288,7 +288,7 @@ const guide = {
       },
       {
         heading: "濃度 (Density)",
-        body: "1 未満はインク量そのものを薄くします（全体が淡くなります）。\n\n1 を超える領域では「一律に濃くする」のではなく、中間調を軸にトーンを立てます（濃い側は詰まり、薄い側は抜ける）。一律に濃くすると全部のトーンが「隣の点と融合する濃さ」まで押し上げられ、色や明るさの違う面同士が同じベタ面に潰れてしまいます（Dot Size が大きいほど顕著）。中間調を軸にすることで、最暗部だけがベタ近くまで詰まり、その一段下は大きな点のまま残るので、点の力強さと境界の見分けやすさが両立します。",
+        body: "インク全体量です。1 未満はそのままインクを薄くします（全体が淡くなります）。\n\n1 を超える領域も濃くはなりますが、濃い側は頭打ちにせず天井へ滑らかに近づけます。頭打ちにすると暗いトースがまとめて「隣の点と融合する濃さ」に張り付き、明るさの違う面同士が同じベタ面へ潰れます（Dot Size が大きいほど顕著）。漸近させると最暗部だけがベタ近くまで詰まり、その一段下は大きな点のまま残るので、点の力強さと境界の見分けやすさが両立します。",
       },
       {
         heading: "黒生成 (Black generation)",
@@ -308,7 +308,7 @@ const guide = {
       },
       {
         heading: "ツールバー (Toolbar)",
-        body: "パネル上部のアイコン:\n• 履歴（時計）— 最近使った設定を開いて再適用。\n• シャッフル — 設定をランダム化して手早く探索。\n• ガイド（i）— このヘルプ。\n• テーマ — ライト/ダーク切替。",
+        body: "パネル上部のアイコン:\n• 履歴（時計）— このセッションで試した見た目のサムネイル一覧。クリックするとその設定に戻れます。メモリ保持なのでリロードすると消えます。\n• Discover（シャッフル）— 配色と網点の組み合わせを自動生成し、実際の写真で刷ったサムネイルをグリッド表示します。選ぶと適用でき、下の列からその派生を辿れます。WebGPU が使えない環境では従来どおり設定のランダム化になります。\n• ガイド（i）— このヘルプ。\n• テーマ — ライト/ダーク切替。",
       },
       {
         heading: "元に戻す/やり直し・プレビュー操作",
@@ -907,19 +907,19 @@ function App() {
   const applyCandidate = (cand: Candidate) => {
     setColors([...cand.colors]);
     setPaperColor(cand.paperColor);
-    setCurves(cand.invert ? INVERT_CURVES : IDENTITY_CURVES);
+    setCurves(cand.curves ?? (cand.invert ? INVERT_CURVES : IDENTITY_CURVES));
     setDotSize(cand.dotSize);
     setDensity(cand.density);
     setInkOpacity(cand.inkOpacity);
     setMisregistration(cand.misregistration);
     setHalftoneMode(cand.halftoneMode);
     setPaperTexture(cand.paperTexture);
-    setSeparation(DISCOVER_FIXED.separation);
-    setBlackGeneration(DISCOVER_FIXED.blackGeneration);
+    setSeparation(cand.separation);
+    setBlackGeneration(cand.blackGeneration ?? DISCOVER_FIXED.blackGeneration);
     setHighlightCutoff(cand.highlightCutoff);
-    setNoise(DISCOVER_FIXED.noise);
-    setPaperTextureAmount(DISCOVER_FIXED.paperTextureAmount);
-    setTransparentBg(false);
+    setNoise(cand.noise ?? DISCOVER_FIXED.noise);
+    setPaperTextureAmount(cand.paperTextureAmount ?? DISCOVER_FIXED.paperTextureAmount);
+    setTransparentBg(cand.transparentBg ?? false);
     setPresetKey("");
   };
 
@@ -1734,6 +1734,7 @@ function App() {
             open={discoverOpen}
             onOpenChange={setDiscoverOpen}
             imageSrc={imageSrc}
+            current={currentSettings}
             onApply={applyCandidate}
           />
         </Suspense>
