@@ -46,13 +46,12 @@ export interface StencilOptions {
   paperColor?: string;
   /** ハーフトーンモード。"am" = ドットサイズ変化、"fm" = ドット密度変化 */
   halftoneMode?: HalftoneMode;
-  /** 色分解モード。"natural" = 忠実な再現、"bold" = 大胆な色分離 */
-  colorMode?: ColorMode;
   /**
-   * Bold モードで、使用インクで表現できない色（ガモット外）を非印刷にする強さ (0–1)。
-   * 0 = ほぼ切り捨てない、1 = 積極的に非印刷にする。デフォルト: 0.5
+   * 色分解の強さ (0–1)。0 = 忠実な再現（元の Natural）、1 = 大胆な色分離（元の Bold の最大）。
+   * ガモット外の色をどれだけ単色へ寄せるか、版ごとのコントラストをどれだけ立てるかを
+   * 1 本の軸でまとめて制御する。デフォルト: 0
    */
-  gamutThreshold?: number;
+  separation?: number;
   /**
    * 黒生成（GCR）の強さ (0–1)。黒/グレーの中立インクが1本ある構成でのみ有効。
    * 有彩色が重なって作る「グレー成分」を、この割合だけ中立インク（黒）へ置換する。
@@ -497,9 +496,11 @@ function applySnapSeparation(
   paper: RGB,
   inkRgbs: RGB[],
   inkOpacity: number,
-  strength: number
+  strength: number,
+  amount: number
 ): void {
   if (decompIndex.length < 2) return; // 2 版以上でないと「濁る混色」は起きない
+  if (amount <= 0) return;
 
   const m = decompIndex.length;
   const tables = decompIndex.map((idx) =>
@@ -533,7 +534,7 @@ function applySnapSeparation(
     if (offGamut <= 0) continue;
     const satGate = smoothstep(cLo, cHi, Ct);
     const darkGate = smoothstep(18, 40, Lt); // 深い影は 2 版で暗さを確保
-    const snap = offGamut * satGate * darkGate * scale;
+    const snap = offGamut * satGate * darkGate * scale * amount;
     if (snap < 0.02) continue;
 
     // 現状の 2 版合成色（＝濁った混色）を求める
@@ -656,7 +657,12 @@ function applyTwoInkNaturalFit(
  * 版ごとのメリハリ（グラフィックな締まり）を強める。単色分離は
  * {@link applySnapSeparation} が担い、ここは明暗コントラストのみを受け持つ。
  */
-function applyBoldContrast(maps: Float32Array[], pixelCount: number): void {
+function applyBoldContrast(
+  maps: Float32Array[],
+  pixelCount: number,
+  amount: number
+): void {
+  if (amount <= 0) return;
   const GAIN = 6.0;
   const MID = 0.35;
   const s0 = 1 / (1 + Math.exp(GAIN * MID));
@@ -668,7 +674,9 @@ function applyBoldContrast(maps: Float32Array[], pixelCount: number): void {
       const x = m[p];
       if (x < 0.001) { m[p] = 0; continue; }
       const sig = 1 / (1 + Math.exp(-GAIN * (x - MID)));
-      m[p] = Math.max(0, Math.min(1, (sig - s0) / sRange));
+      const bold = Math.max(0, Math.min(1, (sig - s0) / sRange));
+      // amount=0 で恒等、1 で従来の Bold。間は線形に混ぜて連続にする。
+      m[p] = x + (bold - x) * amount;
     }
   }
 }
@@ -762,7 +770,7 @@ export function computeStencil(
   onDensities?: (d: InkDensities) => void,
   densitiesOnly = false
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, colorMode, gamutThreshold = 0.5, blackGeneration = 0.7, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, separation = 0, blackGeneration = 0.7, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;
@@ -836,9 +844,10 @@ export function computeStencil(
   const pixelCount = width * height;
   // 2色 Natural は乗算モデルへ直接フィットするので snap を通らない（＝残差を使わない）。
   // 残差は上限なし NNLS を別途 8 回まわして求めるので、要るときだけ計算する。
-  const useTwoInkFit =
-    colorMode !== "bold" && inkRgbs.length === 2 && decompIndexMap.length === 2;
-  const needResidual = !useTwoInkFit && decompIndexMap.length >= 2;
+  const useTwoInkFit = inkRgbs.length === 2 && decompIndexMap.length === 2;
+  // 残差は snap でしか使わない。2色は separation>0 のときだけ snap を通す。
+  const needResidual =
+    decompIndexMap.length >= 2 && (!useTwoInkFit || separation > 0);
   const decomp = decompInks.length > 0
     ? decomposeColors(source, decompInks, WHITE, needResidual)
     : { maps: [] as Float32Array[], residuals: new Float32Array(pixelCount) };
@@ -865,17 +874,24 @@ export function computeStencil(
     }
   }
 
-  // 色分解の後処理: ガモット外の彩度高色を「混色の濁り」ではなく支配的インク単色へ
-  // 寄せて明度・彩度を保つ（緑→澄んだ青 等）。Natural でも濁りを除去し、Bold はより
-  // 積極的に分離する。Bold の分離強度は gamutThreshold（0-1）で調整できる。
+  // 色分解の後処理。separation（0–1）1 本で「忠実 ⇄ グラフィック」を連続に変える。
+  //
+  // 2色: 乗算モデルへの直接フィットを土台にし、separation の分だけ単色へ寄せる
+  //   （separation=0 なら snap を通さず、フィットそのまま＝最も忠実）。
+  // 3色以上: 従来どおり snap が土台。ガモット外の濁りは separation=0 でも除去し
+  //   （scale 0.85 の下駄）、separation を上げるほど積極的に単色化する。
   if (useTwoInkFit) {
-    // 2色 × Natural: 加法 NNLS の代わりに乗算モデルへ直接フィット（snap 不要・連続）。
-    // Bold・3色以上・GCR 構成には触れない（従来の snap を使う）。
     applyTwoInkNaturalFit(densityMaps, decompIndexMap, source, paper, inkRgbs, inkOpacity);
+    if (separation > 0) {
+      applySnapSeparation(
+        densityMaps, decompIndexMap, residuals, source, paper, inkRgbs, inkOpacity,
+        separation, separation
+      );
+    }
   } else if (decompIndexMap.length >= 2) {
-    const strength = colorMode === "bold" ? 0.5 + gamutThreshold : 0;
     applySnapSeparation(
-      densityMaps, decompIndexMap, residuals, source, paper, inkRgbs, inkOpacity, strength
+      densityMaps, decompIndexMap, residuals, source, paper, inkRgbs, inkOpacity,
+      separation * 1.5, 1
     );
   }
   // 黒生成（GCR）: 有彩色分解の上に、中立な画素ほど黒で明度を担わせ有彩色を薄める。
@@ -885,10 +901,8 @@ export function computeStencil(
       densityMaps, decompIndexMap, kIndex, source, paper, inkRgbs, inkOpacity, blackGeneration
     );
   }
-  // Bold: 版ごとの明暗コントラストを強めてグラフィックな締まりを出す
-  if (colorMode === "bold") {
-    applyBoldContrast(densityMaps, pixelCount);
-  }
+  // 版ごとの明暗コントラスト。separation を上げるほどグラフィックに締まる。
+  applyBoldContrast(densityMaps, pixelCount, separation);
 
   // ハイライトのクリップ（レベル補正）: しきい値未満のごく低い濃度（ほぼ白）を 0 にして、
   // わずかに色づいた画素が網点として散る（端のノイズ）のを防ぐ。

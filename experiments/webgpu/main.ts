@@ -113,8 +113,8 @@ async function run() {
   const options: StencilOptions = {
     colors: PRESETS[preset],
     dotSize, misregistration, grain, density: 1.2, inkOpacity: 0.85,
-    paperColor: ($("paper") as HTMLSelectElement).value, halftoneMode: mode, colorMode: "natural",
-    gamutThreshold: 0.5, blackGeneration: 0.7,
+    paperColor: ($("paper") as HTMLSelectElement).value, halftoneMode: mode,
+    separation: parseFloat(($("sep") as HTMLSelectElement).value), blackGeneration: 0.7,
     highlightCutoff: parseFloat(($("cutoff") as HTMLSelectElement).value),
     noise, transparentBg: false, invert: false, renderScale, seed,
     paperTexture, paperTextureAmount,
@@ -198,7 +198,7 @@ async function run() {
     log("requesting WebGPU device…");
     await initGPU();
     ($("run") as HTMLButtonElement).onclick = run;
-    for (const id of ["preset", "mode", "dot", "fx", "size", "paper", "cutoff", "skipcpu", "gpudecomp"]) {
+    for (const id of ["preset", "mode", "dot", "fx", "size", "paper", "sep", "cutoff", "skipcpu", "gpudecomp"]) {
       ($(id) as HTMLElement).onchange = run;
     }
     await run();
