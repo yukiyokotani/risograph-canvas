@@ -72,7 +72,8 @@ export interface CurvesDialogProps {
 }
 
 /**
- * トーンカーブのアイコン。3 つのアンカーを通る S 字の曲線。
+ * トーンカーブのアイコン。1 本の三次ベジェで描いた S 字（両端が寝て中央が立つ）に、
+ * 始点と終点のアンカーを置いたもの。
  */
 export function CurvesIcon({ className }: { className?: string }) {
   return (
@@ -86,10 +87,9 @@ export function CurvesIcon({ className }: { className?: string }) {
       className={className}
       aria-hidden="true"
     >
-      <path d="M3 20C9 20 9 12 12 12C15 12 15 4 21 4" />
-      <circle cx="3" cy="20" r="2.4" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" />
-      <circle cx="21" cy="4" r="2.4" fill="currentColor" stroke="none" />
+      <path d="M4.5 20C10 20 14 4 19.5 4" />
+      <circle cx="4.5" cy="20" r="2.4" fill="currentColor" stroke="none" />
+      <circle cx="19.5" cy="4" r="2.4" fill="currentColor" stroke="none" />
     </svg>
   );
 }
