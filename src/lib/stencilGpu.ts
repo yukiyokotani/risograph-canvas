@@ -615,6 +615,81 @@ function getCompositePipeline(device: GPUDevice): Promise<GPUComputePipeline> {
   return pipeline;
 }
 
+// 濃度マップをセル幅の箱フィルタで平均するパス（CPU の boxBlurDensity と同じ）。
+// 網点は「セルが受け持つ面積の平均トーン」を表すものなので、ドットの大きさは
+// セル中心の 1 画素ではなくセル全体の平均から決める。1 画素サンプルだと
+// 境界を跨ぐセルが大小どちらかに振り切れて輪郭が階段状になる。
+const BLUR_SHADER = /* wgsl */ `
+struct BlurParams {
+  width: u32,
+  height: u32,
+  inkCount: u32,
+  radius: u32,
+  axis: u32,
+  groupsX: u32,
+  _pad0: u32,
+  _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: BlurParams;
+@group(0) @binding(1) var<storage, read> src: array<f32>;
+@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
+
+@compute @workgroup_size(64)
+fn blur(@builtin(global_invocation_id) id: vec3<u32>) {
+  let pixelCount = params.width * params.height;
+  let total = pixelCount * params.inkCount;
+  // 1 次元だとワークグループ数が上限(65,535)を超えるので 2 次元に展開する
+  let index = id.x + id.y * params.groupsX * 64u;
+  if (index >= total) {
+    return;
+  }
+  let ink = index / pixelCount;
+  let pixel = index % pixelCount;
+  let x = i32(pixel % params.width);
+  let y = i32(pixel / params.width);
+  let base = ink * pixelCount;
+  let r = i32(params.radius);
+  let maxX = i32(params.width) - 1;
+  let maxY = i32(params.height) - 1;
+
+  var sum = 0.0;
+  for (var i = -r; i <= r; i++) {
+    var sx = x;
+    var sy = y;
+    if (params.axis == 0u) {
+      sx = clamp(x + i, 0, maxX);
+    } else {
+      sy = clamp(y + i, 0, maxY);
+    }
+    sum += src[base + u32(sy) * params.width + u32(sx)];
+  }
+  dst[index] = sum / f32(2 * r + 1);
+}
+`;
+
+const blurPipelines = new WeakMap<GPUDevice, Promise<GPUComputePipeline>>();
+
+function getBlurPipeline(device: GPUDevice): Promise<GPUComputePipeline> {
+  let pipeline = blurPipelines.get(device);
+  if (!pipeline) {
+    pipeline = device.createComputePipelineAsync({
+      label: "stencil density blur pipeline",
+      layout: "auto",
+      compute: {
+        module: device.createShaderModule({
+          label: "stencil density blur shader",
+          code: BLUR_SHADER,
+        }),
+        entryPoint: "blur",
+      },
+    });
+    pipeline.catch(() => blurPipelines.delete(device));
+    blurPipelines.set(device, pipeline);
+  }
+  return pipeline;
+}
+
 export async function compositeFromDensityBuffer(
   _device: GPUDevice,
   _input: GpuComposeBufferInput
@@ -681,6 +756,73 @@ export async function compositeFromDensityBuffer(
   }
   if (densityBuffer.size < densityBindingSize) {
     throw new Error("densityBuffer is smaller than the requested density data");
+  }
+
+  // セル平均（分離型の箱ぼかし）を先に掛ける。CPU の boxBlurDensity と同じ半径・同じ式。
+  const blurRadius = Math.max(0, Math.round(cellSize / 2));
+  const blurBuffers: GPUBuffer[] = [];
+  let sampledDensity = densityBuffer;
+  if (blurRadius > 0 && inkCount > 0 && pixelCount > 0) {
+    const blurPipeline = await getBlurPipeline(device);
+    for (let i = 0; i < 2; i++) {
+      blurBuffers.push(
+        device.createBuffer({
+          label: `stencil density blur scratch ${i}`,
+          size: densityBindingSize,
+          usage: GPUBufferUsage.STORAGE,
+        })
+      );
+    }
+    const total = pixelCount * inkCount;
+    const groups = Math.ceil(total / 64);
+    const groupsX = Math.min(groups, 32768);
+    const groupsY = Math.ceil(groups / groupsX);
+    device.pushErrorScope("validation");
+    device.pushErrorScope("out-of-memory");
+    const encoder = device.createCommandEncoder({ label: "stencil density blur" });
+    for (let axis = 0; axis < 2; axis++) {
+      const paramsBuf = device.createBuffer({
+        label: "stencil density blur params",
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM,
+        mappedAtCreation: true,
+      });
+      const view = new DataView(paramsBuf.getMappedRange());
+      view.setUint32(0, width, true);
+      view.setUint32(4, height, true);
+      view.setUint32(8, inkCount, true);
+      view.setUint32(12, blurRadius, true);
+      view.setUint32(16, axis, true);
+      view.setUint32(20, groupsX, true);
+      paramsBuf.unmap();
+      blurBuffers.push(paramsBuf);
+      const from = axis === 0 ? densityBuffer : blurBuffers[0];
+      const to = axis === 0 ? blurBuffers[0] : blurBuffers[1];
+      const bind = device.createBindGroup({
+        label: "stencil density blur resources",
+        layout: blurPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: paramsBuf } },
+          { binding: 1, resource: { buffer: from, size: densityBindingSize } },
+          { binding: 2, resource: { buffer: to, size: densityBindingSize } },
+        ],
+      });
+      const pass = encoder.beginComputePass({ label: `stencil density blur ${axis}` });
+      pass.setPipeline(blurPipeline);
+      pass.setBindGroup(0, bind);
+      pass.dispatchWorkgroups(groupsX, groupsY);
+      pass.end();
+    }
+    device.queue.submit([encoder.finish()]);
+    const blurOom = await device.popErrorScope();
+    const blurValidation = await device.popErrorScope();
+    if (blurOom || blurValidation) {
+      for (const buffer of blurBuffers) buffer.destroy();
+      throw new Error(
+        `WebGPU density blur failed: ${(blurValidation ?? blurOom)!.message}`
+      );
+    }
+    sampledDensity = blurBuffers[1];
   }
 
 
@@ -759,7 +901,7 @@ export async function compositeFromDensityBuffer(
         { binding: 0, resource: { buffer: paramsBuffer } },
         {
           binding: 1,
-          resource: { buffer: densityBuffer, size: densityBindingSize },
+          resource: { buffer: sampledDensity, size: densityBindingSize },
         },
         { binding: 2, resource: { buffer: inkBuffer } },
         { binding: 3, resource: { buffer: outputBuffer } },
@@ -794,6 +936,7 @@ export async function compositeFromDensityBuffer(
     return result;
   } finally {
     paramsBuffer.destroy();
+    for (const buffer of blurBuffers) buffer.destroy();
     inkBuffer.destroy();
     outputBuffer.destroy();
     readbackBuffer.destroy();

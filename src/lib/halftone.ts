@@ -71,6 +71,52 @@ export function densityCurve(d: number, density: number): number {
 }
 
 /**
+ * 濃度マップをセル幅の箱フィルタで平均する（分離型・O(N)）。
+ *
+ * 網点は「セルが受け持つ面積の平均トーン」をドットの面積で表すものなので、
+ * ドットの大きさはセル中心の 1 画素ではなく、そのセル全体の平均から決めるのが正しい。
+ * 1 画素サンプルだと、境界を跨ぐセルが大小どちらかに振り切れて輪郭が階段状になり、
+ * 1 画素のゴミがそのまま大きな点になる。セルより細かいディテールは網点では
+ * 表現できないので、この平均化で失われる情報は無い。
+ */
+function boxBlurDensity(
+  map: Float32Array,
+  width: number,
+  height: number,
+  radius: number
+): Float32Array {
+  const r = Math.max(0, Math.round(radius));
+  if (r === 0) return map;
+  const inv = 1 / (2 * r + 1);
+  const tmp = new Float32Array(map.length);
+  // 横方向（範囲外はクランプ。端で暗くならないようにする）
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    let sum = 0;
+    for (let i = -r; i <= r; i++) sum += map[row + Math.min(width - 1, Math.max(0, i))];
+    for (let x = 0; x < width; x++) {
+      tmp[row + x] = sum * inv;
+      const out = row + Math.min(width - 1, Math.max(0, x - r));
+      const add = row + Math.min(width - 1, Math.max(0, x + r + 1));
+      sum += map[add] - map[out];
+    }
+  }
+  // 縦方向
+  const out = new Float32Array(map.length);
+  for (let x = 0; x < width; x++) {
+    let sum = 0;
+    for (let i = -r; i <= r; i++) sum += tmp[Math.min(height - 1, Math.max(0, i)) * width + x];
+    for (let y = 0; y < height; y++) {
+      out[y * width + x] = sum * inv;
+      const rowOut = Math.min(height - 1, Math.max(0, y - r)) * width + x;
+      const rowAdd = Math.min(height - 1, Math.max(0, y + r + 1)) * width + x;
+      sum += tmp[rowAdd] - tmp[rowOut];
+    }
+  }
+  return out;
+}
+
+/**
  * AM ハーフトーン: ドット中心の濃度でドットサイズを決定し、常に真円を描画する。
  * 各ピクセルを SS×SS のサブサンプルで評価し、真円内に入るサブサンプルの割合を
  * カバレッジとする（アナリティックなアンチエイリアス）。これによりドットサイズに
@@ -87,6 +133,8 @@ function applyAMHalftone(
   const result = new Float32Array(width * height);
 
   const cellSize = options.dotSize + 2;
+  // ドットの大きさはセルの平均濃度で決める（1 画素サンプルだと輪郭が階段状になる）
+  const source = boxBlurDensity(densityMap, width, height, cellSize / 2);
   const rad = (angle * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
@@ -130,7 +178,7 @@ function applyAMHalftone(
 
               let d: number;
               if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
-                d = densityMap[imgY * width + imgX];
+                d = source[imgY * width + imgX];
               } else {
                 d = 0;
               }
@@ -200,6 +248,8 @@ function applyFMHalftone(
   const cellSize = dotSize;
   // ドット半径 = セルサイズの半分（ドット直径 = セルサイズ）
   const dotRadius = dotSize * 0.5;
+  // AM と同じく、確率の元になる濃度もセルの平均で取る
+  const source = boxBlurDensity(densityMap, width, height, cellSize / 2);
 
   const SS = superSamples(cellSize);
   const inv = 1 / SS;
@@ -243,7 +293,7 @@ function applyFMHalftone(
 
               let d: number;
               if (imgX >= 0 && imgX < width && imgY >= 0 && imgY < height) {
-                d = densityMap[imgY * width + imgX];
+                d = source[imgY * width + imgX];
               } else {
                 d = 0;
               }
