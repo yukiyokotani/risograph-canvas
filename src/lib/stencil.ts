@@ -69,8 +69,6 @@ export interface StencilOptions {
   noise?: number;
   /** 背景を透明にする。インク部分のみ残る */
   transparentBg?: boolean;
-  /** 入力画像の階調を反転する。暗い紙に明るいインクで刷るときに使用 */
-  invert?: boolean;
   /**
    * トーンカーブの LUT（256×3, R/G/B の順に 0–255）。色分解の手前で入力画像へ適用する。
    * 省略時は恒等（何もしない）。曲線の編集と LUT 化は lib/curve.ts が受け持つ。
@@ -775,14 +773,14 @@ export function computeStencil(
   onDensities?: (d: InkDensities) => void,
   densitiesOnly = false
 ): Uint8ClampedArray {
-  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, separation = 0, blackGeneration = 0.7, highlightCutoff = 0, noise = 0, transparentBg = false, invert = false, toneLut, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
+  const { colors, dotSize, misregistration, grain, density, inkOpacity = 0.85, paperColor, halftoneMode, separation = 0, blackGeneration = 0.7, highlightCutoff = 0, noise = 0, transparentBg = false, toneLut, renderScale = 1, seed: rngSeed = DEFAULT_SEED, paperTexture = "felt", paperTextureAmount = 0.5 } = options;
   const { width, height } = sourceData;
   // ピクセル単位のパラメータを描画スケールへ比例させる（点の相対サイズを保つ）
   const scaledDotSize = dotSize * renderScale;
   const scaledMisreg = misregistration * renderScale;
   const paper = paperColor ? hexToRgb(paperColor) : DEFAULT_PAPER;
 
-  // トーンカーブ → 階調反転 の順に、色分解の手前で入力画像を整える。
+  // トーンカーブ: 色分解の手前で入力画像の階調を整える（反転もカーブで表す）。
   let source = sourceData;
   if (toneLut && toneLut.length >= 768) {
     const curved = new Uint8ClampedArray(sourceData.data.length);
@@ -794,17 +792,7 @@ export function computeStencil(
     }
     source = { data: curved, width, height };
   }
-  if (invert) {
-    const base = source.data;
-    const invData = new Uint8ClampedArray(base.length);
-    for (let i = 0; i < base.length; i += 4) {
-      invData[i] = 255 - base[i];
-      invData[i + 1] = 255 - base[i + 1];
-      invData[i + 2] = 255 - base[i + 2];
-      invData[i + 3] = base[i + 3]; // alpha はそのまま
-    }
-    source = { data: invData, width, height };
-  }
+
 
   // インク RGB を取得
   const inkRgbs = colors.map((c) => hexToRgb(c.color));

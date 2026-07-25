@@ -46,6 +46,7 @@ import {
   buildToneLut,
   isIdentityCurves,
   IDENTITY_CURVES,
+  INVERT_CURVES,
   type ToneCurves,
 } from "./lib/curve";
 import { useVisualHistory } from "./hooks/useVisualHistory";
@@ -553,7 +554,6 @@ function App() {
   const [paperColor, setPaperColor] = useState("#f5f0e8");
   const [noise, setNoise] = useState(0);
   const [transparentBg, setTransparentBg] = useState(false);
-  const [invert, setInvert] = useState(false);
   const [curves, setCurves] = useState<ToneCurves>(IDENTITY_CURVES);
   const [curvesOpen, setCurvesOpen] = useState(false);
   const curvesActive = !isIdentityCurves(curves);
@@ -636,12 +636,37 @@ function App() {
           g[data[i + 1]]++;
           b[data[i + 2]]++;
         }
-        for (const bins of [r, g, b]) {
-          let peak = 0;
-          for (const v of bins) if (v > peak) peak = v;
-          if (peak > 0) for (let i = 0; i < 256; i++) bins[i] /= peak;
-        }
-        setHistogram({ r, g, b });
+        // そのままだと、階調が飛び飛びの画像（グラデの階段など）で 1 段に度数が
+        // 集中し、「途中で終わる縦線」の集まりに見えてしまう。軽く平滑化して
+        // 分布の形として読めるようにする。
+        const R = 8; // 階調が飛び飛びでも「分布の形」として読める程度に広く均す
+        const K: number[] = [];
+        for (let k = -R; k <= R; k++) K.push(Math.exp(-(k * k) / (2 * (R / 2) ** 2)));
+        const kSum = K.reduce((a, b) => a + b, 0);
+        const smooth = (bins: Float32Array) => {
+          const out = new Float32Array(256);
+          for (let i = 0; i < 256; i++) {
+            let acc = 0;
+            for (let k = -R; k <= R; k++) {
+              const j = Math.min(255, Math.max(0, i + k));
+              acc += bins[j] * K[k + R];
+            }
+            out[i] = acc / kSum;
+          }
+          return out;
+        };
+        // 正規化は最大値ではなく上位側の代表値で行う（1 本の突出で全体が潰れないように）
+        const normalize = (bins: Float32Array) => {
+          const sorted = Float32Array.from(bins).sort();
+          const p98 = sorted[Math.floor(255 * 0.98)] || sorted[255] || 1;
+          for (let i = 0; i < 256; i++) bins[i] = Math.min(1, bins[i] / p98);
+          return bins;
+        };
+        setHistogram({
+          r: normalize(smooth(r)),
+          g: normalize(smooth(g)),
+          b: normalize(smooth(b)),
+        });
       })
       .catch(() => {});
     return () => {
@@ -758,7 +783,6 @@ function App() {
         paperTextureAmount,
         noise,
         transparentBg,
-        invert,
         toneLut,
         renderScale: scale,
       };
@@ -884,7 +908,7 @@ function App() {
   const applyCandidate = (cand: Candidate) => {
     setColors([...cand.colors]);
     setPaperColor(cand.paperColor);
-    setInvert(cand.invert);
+    setCurves(cand.invert ? INVERT_CURVES : IDENTITY_CURVES);
     setDotSize(cand.dotSize);
     setDensity(cand.density);
     setInkOpacity(cand.inkOpacity);
@@ -932,7 +956,7 @@ function App() {
     paperTextureAmount,
     noise,
     transparentBg,
-    invert,
+    curves,
   };
   // 以前は設定履歴を localStorage に置いていた。今はメモリ保持なので、
   // 既存ユーザーのストレージに残った古いキーを掃除しておく。
@@ -968,7 +992,7 @@ function App() {
     setPaperTextureAmount(s.paperTextureAmount);
     setNoise(s.noise);
     setTransparentBg(s.transparentBg);
-    setInvert(s.invert);
+    setCurves(s.curves ?? IDENTITY_CURVES);
     // 復元した色がちょうどプリセットと一致するならプリセット表示も戻す
     // （Undo でプリセットへ戻ったのに選択欄が空になるのを防ぐ）。
     setPresetKey(matchPresetKey(s.colors));
@@ -1096,7 +1120,6 @@ function App() {
               paperTextureAmount={paperTextureAmount}
               noise={noise}
               transparentBg={transparentBg}
-              invert={invert}
               toneLut={toneLut}
               className="shadow-lg"
               style={{ width: Math.round(canvasWidth), height: "auto" }}
@@ -1262,20 +1285,6 @@ function App() {
               >
                 Choose File
               </Button>
-              <div className="flex items-center gap-1.5">
-                <Checkbox
-                  id="invert"
-                  checked={invert}
-                  onCheckedChange={(v: boolean) => setInvert(v)}
-                />
-                <Label
-                  htmlFor="invert"
-                  className="text-xs text-muted-foreground"
-                  title="Invert the input image's tones (light ↔ dark) before printing"
-                >
-                  Invert tones
-                </Label>
-              </div>
               <Button
                 variant="outline"
                 className="h-9 shrink-0 gap-1.5 text-xs"

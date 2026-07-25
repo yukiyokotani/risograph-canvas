@@ -29,7 +29,7 @@ struct Params {
   decompCount: u32,
   kIndex: u32,
   useGcr: u32,
-  invert: u32,
+  _padInvert: u32,
 
   snapAmount: f32,
   snapEnabled: u32,
@@ -195,14 +195,9 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
   let alphaByte = (packed >> 24u) & 255u;
   let alpha = f32(alphaByte) / 255.0;
 
-  var red = rawR;
-  var green = rawG;
-  var blue = rawB;
-  if (params.invert != 0u) {
-    red = 255.0 - rawR;
-    green = 255.0 - rawG;
-    blue = 255.0 - rawB;
-  }
+  let red = rawR;
+  let green = rawG;
+  let blue = rawB;
 
   var densities: array<f32, 8>;
   var dotTargets: array<f32, 8>;
@@ -659,7 +654,7 @@ export async function decomposeToGpuBuffer(
   params.setUint32(16, decompIndexMap.length, true);
   params.setUint32(20, useGcr ? kIndex : 0, true);
   params.setUint32(24, useGcr ? 1 : 0, true);
-  params.setUint32(28, options.invert ? 1 : 0, true);
+  params.setUint32(28, 0, true); // 旧 invert のスロット（オフセット維持のため残す）
   const twoInkFitCandidate = inkCount === 2 && decompIndexMap.length === 2;
   // snap の効き量: 2色はフィットが土台なので separation そのもの、3色以上は従来どおり常時
   params.setFloat32(32, twoInkFitCandidate ? separation : 1, true);

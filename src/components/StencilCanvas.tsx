@@ -40,7 +40,6 @@ export interface StencilCanvasProps {
   paperTextureAmount?: number;
   noise?: number;
   transparentBg?: boolean;
-  invert?: boolean;
   /** トーンカーブ LUT（256×3）。色分解の手前で入力画像へ適用する。 */
   toneLut?: Uint8Array;
   /**
@@ -85,7 +84,6 @@ export const StencilCanvas = forwardRef<
     paperTextureAmount = 0.5,
     noise = 0,
     transparentBg = false,
-    invert = false,
     toneLut,
     renderScale = 1,
     className,
@@ -162,7 +160,7 @@ export const StencilCanvas = forwardRef<
   // 処理パラメータのキーを生成し、完了キーと比較して processing を派生
   const paramsKey = [
     dotSize, density, inkOpacity, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, misregistration,
-    transparentBg, invert, paperColor, grain, renderScale, toneLut,
+    transparentBg, paperColor, grain, renderScale, toneLut,
     colors.map((c) => c.color).join(","),
   ].join("|");
   const [processedKey, setProcessedKey] = useState("");
@@ -171,11 +169,11 @@ export const StencilCanvas = forwardRef<
 
   // 最新パラメータを ref で保持
   const paramsRef = useRef({
-    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert, toneLut, renderScale,
+    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, toneLut, renderScale,
   });
   useEffect(() => {
     paramsRef.current = {
-      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert, toneLut, renderScale,
+      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, toneLut, renderScale,
     };
   });
 
@@ -207,7 +205,6 @@ export const StencilCanvas = forwardRef<
             paperTextureAmount: p.paperTextureAmount,
             noise: p.noise,
             transparentBg: p.transparentBg,
-            invert: p.invert,
             toneLut: p.toneLut,
             renderScale: p.renderScale,
           });

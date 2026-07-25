@@ -4,6 +4,7 @@ import { Button } from "./ui/button";
 import {
   buildCurveLut,
   IDENTITY_POINTS,
+  INVERT_POINTS,
   type CurvePoint,
   type ToneCurves,
 } from "../lib/curve";
@@ -20,6 +21,7 @@ const CHANNELS: { key: ChannelKey; label: string; stroke: string }[] = [
 /** 使い出しの取っ掛かりになるプリセット（点は x 昇順） */
 const PRESETS: { label: string; points: CurvePoint[] }[] = [
   { label: "Linear", points: IDENTITY_POINTS },
+  { label: "Invert", points: INVERT_POINTS },
   {
     label: "Contrast",
     points: [
@@ -91,32 +93,24 @@ export function CurvesDialog({
     return d;
   }, [points]);
 
-  const histPath = useMemo(() => {
+  /** R/G/B それぞれの面グラフ。重なりは加算的に見せる（実物のヒストグラムらしく）。 */
+  const histPaths = useMemo(() => {
     if (!histogram) return null;
-    const src =
-      channel === "r"
-        ? histogram.r
-        : channel === "g"
-          ? histogram.g
-          : channel === "b"
-            ? histogram.b
-            : null;
-    // RGB タブでは 3 チャンネルの平均を出す
-    const bins = new Float32Array(256);
-    for (let i = 0; i < 256; i++) {
-      bins[i] = src
-        ? src[i]
-        : (histogram.r[i] + histogram.g[i] + histogram.b[i]) / 3;
-    }
-    let d = `M${PAD},${PAD + SIZE}`;
-    for (let i = 0; i < 256; i++) {
-      const x = PAD + (i / 255) * SIZE;
-      const y = PAD + SIZE - Math.min(1, bins[i]) * SIZE * 0.9;
-      d += `L${x.toFixed(2)},${y.toFixed(2)}`;
-    }
-    d += `L${PAD + SIZE},${PAD + SIZE}Z`;
-    return d;
-  }, [histogram, channel]);
+    const build = (bins: Float32Array) => {
+      let d = `M${PAD},${PAD + SIZE}`;
+      for (let i = 0; i < 256; i++) {
+        const x = PAD + (i / 255) * SIZE;
+        const y = PAD + SIZE - Math.min(1, bins[i]) * SIZE * 0.92;
+        d += `L${x.toFixed(2)},${y.toFixed(2)}`;
+      }
+      return d + `L${PAD + SIZE},${PAD + SIZE}Z`;
+    };
+    return [
+      { key: "r", d: build(histogram.r), color: "#e5484d" },
+      { key: "g", d: build(histogram.g), color: "#30a46c" },
+      { key: "b", d: build(histogram.b), color: "#3e63dd" },
+    ];
+  }, [histogram]);
 
   const setPoints = useCallback(
     (next: CurvePoint[]) => {
@@ -243,8 +237,21 @@ export function CurvesDialog({
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
           >
-            {histPath && (
-              <path d={histPath} fill="currentColor" opacity={0.12} />
+            {/* ヒストグラム: 選択中のチャンネルを強め、他は控えめに */}
+            {histPaths && (
+              <g className="mix-blend-multiply dark:mix-blend-screen">
+                {histPaths.map((h) => {
+                  const focused = channel === "rgb" || channel === h.key;
+                  return (
+                    <path
+                      key={h.key}
+                      d={h.d}
+                      fill={h.color}
+                      opacity={focused ? 0.22 : 0.07}
+                    />
+                  );
+                })}
+              </g>
             )}
             {/* 罫線は拡大しても 1px のままにする（太さがばらついて見えるのを防ぐ） */}
             <g
@@ -293,22 +300,24 @@ export function CurvesDialog({
               d={curvePath}
               fill="none"
               stroke={activeStroke}
-              strokeWidth={2}
+              strokeWidth={1.75}
+              strokeLinecap="round"
               vectorEffect="non-scaling-stroke"
             />
             {points.map((p, i) => {
               const s = toSvg(p);
               return (
-                <circle
-                  key={i}
-                  cx={s.x}
-                  cy={s.y}
-                  r={i === dragIndex ? 6 : 4.5}
-                  fill={activeStroke}
-                  stroke="var(--background)"
-                  strokeWidth={1.5}
-                  onDoubleClick={() => removePoint(i)}
-                />
+                <g key={i} onDoubleClick={() => removePoint(i)}>
+                  <circle
+                    cx={s.x}
+                    cy={s.y}
+                    r={i === dragIndex ? 5.5 : 4}
+                    fill="var(--background)"
+                    stroke={activeStroke}
+                    strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </g>
               );
             })}
           </svg>

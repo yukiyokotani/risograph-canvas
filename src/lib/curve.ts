@@ -29,6 +29,20 @@ export const IDENTITY_POINTS: CurvePoint[] = [
   { x: 1, y: 1 },
 ];
 
+/** 端点を入れ替えた反転カーブ（旧「Invert tones」と同じ） */
+export const INVERT_POINTS: CurvePoint[] = [
+  { x: 0, y: 1 },
+  { x: 1, y: 0 },
+];
+
+/** 反転カーブ一式（RGB 一括だけ反転させる） */
+export const INVERT_CURVES: ToneCurves = {
+  rgb: INVERT_POINTS,
+  r: IDENTITY_POINTS,
+  g: IDENTITY_POINTS,
+  b: IDENTITY_POINTS,
+};
+
 export const IDENTITY_CURVES: ToneCurves = {
   rgb: IDENTITY_POINTS,
   r: IDENTITY_POINTS,
