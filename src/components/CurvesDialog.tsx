@@ -11,11 +11,16 @@ import {
 
 type ChannelKey = keyof ToneCurves;
 
-const CHANNELS: { key: ChannelKey; label: string; stroke: string }[] = [
-  { key: "rgb", label: "RGB", stroke: "currentColor" },
-  { key: "r", label: "R", stroke: "#e5484d" },
-  { key: "g", label: "G", stroke: "#30a46c" },
-  { key: "b", label: "B", stroke: "#3e63dd" },
+const CHANNELS: {
+  key: ChannelKey;
+  label: string;
+  stroke: string;
+  chip: string;
+}[] = [
+  { key: "rgb", label: "RGB", stroke: "currentColor", chip: "" },
+  { key: "r", label: "R", stroke: "#ff5d5d", chip: "#d93b3b" },
+  { key: "g", label: "G", stroke: "#49d17a", chip: "#2fa35c" },
+  { key: "b", label: "B", stroke: "#5b8cff", chip: "#3f68e0" },
 ];
 
 /** 使い出しの取っ掛かりになるプリセット（点は x 昇順） */
@@ -93,23 +98,36 @@ export function CurvesDialog({
     return d;
   }, [points]);
 
-  /** R/G/B それぞれの面グラフ。重なりは加算的に見せる（実物のヒストグラムらしく）。 */
+  /**
+   * 背景のヒストグラム。合成（3ch の最大）をグレーで敷き、その上に R/G/B を
+   * 「半透明の塗り＋輪郭線」で重ねる（業務用のカラコレ UI と同じ見せ方）。
+   * 塗りだけだと重なりが濁り、線だけだと分布の量感が出ないので両方を使う。
+   */
   const histPaths = useMemo(() => {
     if (!histogram) return null;
-    const build = (bins: Float32Array) => {
-      let d = `M${PAD},${PAD + SIZE}`;
+    const line = (bins: Float32Array) => {
+      let d = "";
       for (let i = 0; i < 256; i++) {
         const x = PAD + (i / 255) * SIZE;
         const y = PAD + SIZE - Math.min(1, bins[i]) * SIZE * 0.92;
-        d += `L${x.toFixed(2)},${y.toFixed(2)}`;
+        d += `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
       }
-      return d + `L${PAD + SIZE},${PAD + SIZE}Z`;
+      return d;
     };
-    return [
-      { key: "r", d: build(histogram.r), color: "#e5484d" },
-      { key: "g", d: build(histogram.g), color: "#30a46c" },
-      { key: "b", d: build(histogram.b), color: "#3e63dd" },
-    ];
+    const combined = new Float32Array(256);
+    for (let i = 0; i < 256; i++) {
+      combined[i] = Math.max(histogram.r[i], histogram.g[i], histogram.b[i]);
+    }
+    const area = (bins: Float32Array) =>
+      `M${PAD},${PAD + SIZE}` + line(bins).slice(1) + `L${PAD + SIZE},${PAD + SIZE}Z`;
+    return {
+      fill: area(combined),
+      lines: [
+        { key: "r", d: line(histogram.r), area: area(histogram.r), color: "#ff5d5d" },
+        { key: "g", d: line(histogram.g), area: area(histogram.g), color: "#49d17a" },
+        { key: "b", d: line(histogram.b), area: area(histogram.b), color: "#5b8cff" },
+      ],
+    };
   }, [histogram]);
 
   const setPoints = useCallback(
@@ -214,12 +232,20 @@ export function CurvesDialog({
               <button
                 key={c.key}
                 onClick={() => setChannel(c.key)}
-                className={`h-7 flex-1 rounded-md border text-xs transition-colors ${
+                className={`h-7 flex-1 rounded-md border text-xs font-medium transition-colors ${
                   channel === c.key
-                    ? "border-foreground/30 bg-accent text-foreground"
+                    ? "text-background"
                     : "border-transparent text-muted-foreground hover:bg-accent/60"
                 }`}
-                style={channel === c.key && c.key !== "rgb" ? { color: c.stroke } : undefined}
+                style={
+                  channel === c.key
+                    ? {
+                        background: c.key === "rgb" ? "var(--foreground)" : c.chip,
+                        borderColor: c.key === "rgb" ? "var(--foreground)" : c.chip,
+                        color: c.key === "rgb" ? "var(--background)" : "#fff",
+                      }
+                    : undefined
+                }
               >
                 {c.label}
               </button>
@@ -237,18 +263,23 @@ export function CurvesDialog({
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
           >
-            {/* ヒストグラム: 選択中のチャンネルを強め、他は控えめに */}
             {histPaths && (
-              <g className="mix-blend-multiply dark:mix-blend-screen">
-                {histPaths.map((h) => {
+              <g>
+                <path d={histPaths.fill} fill="currentColor" opacity={0.14} />
+                {histPaths.lines.map((h) => {
                   const focused = channel === "rgb" || channel === h.key;
                   return (
-                    <path
-                      key={h.key}
-                      d={h.d}
-                      fill={h.color}
-                      opacity={focused ? 0.22 : 0.07}
-                    />
+                    <g key={h.key} opacity={focused ? 1 : 0.25}>
+                      <path d={h.area} fill={h.color} opacity={0.16} />
+                      <path
+                        d={h.d}
+                        fill="none"
+                        stroke={h.color}
+                        strokeWidth={1}
+                        vectorEffect="non-scaling-stroke"
+                        opacity={0.7}
+                      />
+                    </g>
                   );
                 })}
               </g>
@@ -268,19 +299,19 @@ export function CurvesDialog({
                 fill="none"
                 opacity={0.25}
               />
-              {[0.25, 0.5, 0.75].map((t) => (
-                <g key={t} opacity={0.12}>
+              {[1, 2, 3, 4, 5, 6, 7].map((n) => (
+                <g key={n} opacity={n === 4 ? 0.16 : 0.08}>
                   <line
-                    x1={PAD + t * SIZE}
+                    x1={PAD + (n / 8) * SIZE}
                     y1={PAD}
-                    x2={PAD + t * SIZE}
+                    x2={PAD + (n / 8) * SIZE}
                     y2={PAD + SIZE}
                   />
                   <line
                     x1={PAD}
-                    y1={PAD + t * SIZE}
+                    y1={PAD + (n / 8) * SIZE}
                     x2={PAD + SIZE}
-                    y2={PAD + t * SIZE}
+                    y2={PAD + (n / 8) * SIZE}
                   />
                 </g>
               ))}
@@ -311,10 +342,10 @@ export function CurvesDialog({
                   <circle
                     cx={s.x}
                     cy={s.y}
-                    r={i === dragIndex ? 5.5 : 4}
-                    fill="var(--background)"
-                    stroke={activeStroke}
-                    strokeWidth={2}
+                    r={i === dragIndex ? 5.5 : 4.25}
+                    fill={activeStroke}
+                    stroke="#00000066"
+                    strokeWidth={1}
                     vectorEffect="non-scaling-stroke"
                   />
                 </g>
