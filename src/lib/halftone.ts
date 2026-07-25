@@ -44,37 +44,30 @@ const DOT_FILL_D = Math.PI / 4; // ≒0.785
 const DOT_MAX_R = 0.58;
 
 /**
- * Density カーブの中間調ピボット。この濃度は Density を上げても動かず、
- * これより濃い側は詰まり、薄い側は抜ける（＝コントラストが上がる軸）。
- */
-const DENSITY_PIVOT = 0.5;
-/** Density>1 のとき、コントラスト指数をどれだけ立てるか */
-const DENSITY_CONTRAST = 1.2;
-
-/**
  * Density スライダの適用カーブ（CPU/GPU 共通の定義）。
  *
  * 1 以下は従来どおりインク量の一律スケール（薄く刷る）。
  *
- * 1 を超える領域は「一律に濃くする」のをやめ、中間調（{@link DENSITY_PIVOT}）を軸に
- * トーンカーブを立てる（濃い側は詰まり、薄い側は抜ける）。一律スケールだと最暗部が
- * すぐ天井（濃度 1）に張り付き、AM 網点は 0.785 を超えると隣接ドットが融合するため、
- * 「暗い側の複数のトーンがまとめてベタに潰れて境界が消える」（例: dotSize と Density を
- * 両方上げると、色の違う面同士が同じベタ面になる）。ピボットを跨ぐカーブにすれば、
- * 最暗部だけがベタ近くまで融合し、その一段下は融合域より下に留まるので、
+ * 1 を超える領域は一律スケール `d × density` の「ハードな頭打ち」だけをやめ、
+ * 天井へ漸近させる:
+ *
+ *     d' = 1 − (1 − d)^density
+ *
+ * 薄い側では `1 − (1 − d)^s ≈ s·d` なので**従来と実質同じ濃さ**になり、
+ * 濃い側だけが 1 に張り付かず滑らかに詰まる。一律スケールだと最暗部が天井に
+ * クリップされ、AM 網点は 0.785 を超えると隣接ドットが融合するため、
+ * 「暗い側の複数のトーンがまとめてベタに潰れて境界が消える」（dotSize と Density を
+ * 両方上げると、色の違う面同士が同じベタ面になる）。漸近させれば最暗部だけが
+ * ベタ近くまで融合し、その一段下は融合域より下に残るので、
  * 「大きな点／ベタ近くを保ちつつ、隣のトーンとの見分けはつく」状態になる。
  *
- * 0/1 とピボットを固定する単調な C1 連続カーブなので、階調飛びやクリップは起きない。
+ * 単調で 0→0・1→1 を保ち、density=1 では恒等（＝従来と一致）。
  */
 export function densityCurve(d: number, density: number): number {
   if (density <= 1) return Math.min(d * density, 1);
   if (d <= 0) return 0;
   if (d >= 1) return 1;
-  const contrast = 1 + (density - 1) * DENSITY_CONTRAST;
-  if (d < DENSITY_PIVOT) {
-    return DENSITY_PIVOT * Math.pow(d / DENSITY_PIVOT, contrast);
-  }
-  return 1 - (1 - DENSITY_PIVOT) * Math.pow((1 - d) / (1 - DENSITY_PIVOT), contrast);
+  return 1 - Math.pow(1 - d, density);
 }
 
 /**

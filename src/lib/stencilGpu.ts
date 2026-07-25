@@ -67,77 +67,7 @@ export interface GpuComposeBufferInput {
 }
 
 /** RGBA 8bit ピクセル (length = width*height*4) を返す。 */
-export async function compositeFromDensityBuffer(
-  _device: GPUDevice,
-  _input: GpuComposeBufferInput
-): Promise<Uint8ClampedArray> {
-  const device = _device;
-  const input = _input;
-  const {
-    densityBuffer,
-    inkCount,
-    angles,
-    inkRgbs,
-    paper,
-    width,
-    height,
-    dotSize,
-    density,
-    inkOpacity,
-    halftoneMode,
-    transparentBg,
-    misregistration,
-    grain,
-    noise,
-    seed,
-    paperTexture,
-    paperTextureAmount,
-    renderScale,
-  } = input;
-
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 0 || height < 0) {
-    throw new Error("width and height must be non-negative integers");
-  }
-  if (!Number.isInteger(inkCount) || inkCount < 0) {
-    throw new Error("inkCount must be a non-negative integer");
-  }
-  if (inkCount !== angles.length || inkCount !== inkRgbs.length) {
-    throw new Error("inkCount, angles, and inkRgbs must have the same value");
-  }
-
-  const pixelCount = width * height;
-  if (!Number.isSafeInteger(pixelCount)) {
-    throw new Error("image dimensions are too large");
-  }
-  if (pixelCount === 0) return new Uint8ClampedArray();
-  if (!(dotSize > 0) || !Number.isFinite(dotSize)) {
-    throw new Error("dotSize must be a positive finite number");
-  }
-
-  const cellSize = halftoneMode === "am" ? dotSize + 2 : dotSize;
-  const dotRadius = dotSize * 0.5;
-  const ss = cellSize >= 9 ? 2 : cellSize >= 4.5 ? 3 : 4;
-  const searchRange = Math.max(1, Math.ceil(dotRadius / cellSize));
-  const outputByteLength = pixelCount * 4;
-  const densityByteLength = pixelCount * inkCount * Float32Array.BYTES_PER_ELEMENT;
-  const densityBindingSize = Math.max(4, densityByteLength);
-  const inkStrideFloats = 8;
-  const inkByteLength = inkCount * inkStrideFloats * Float32Array.BYTES_PER_ELEMENT;
-
-  if (
-    outputByteLength > device.limits.maxStorageBufferBindingSize ||
-    densityByteLength > device.limits.maxStorageBufferBindingSize ||
-    inkByteLength > device.limits.maxStorageBufferBindingSize
-  ) {
-    throw new Error("stencil input exceeds this device's storage-buffer limit");
-  }
-  if (densityBuffer.size < densityBindingSize) {
-    throw new Error("densityBuffer is smaller than the requested density data");
-  }
-
-  const shader = device.createShaderModule({
-    label: "stencil compositor shader",
-    code: /* wgsl */ `
+const COMPOSITE_SHADER = /* wgsl */ `
 struct Params {
   width: u32,
   height: u32,
@@ -197,10 +127,8 @@ fn roundToByte(value: f32) -> u32 {
 }
 
 // Density カーブ（CPU halftone.ts の densityCurve と同じ定義）。
-// 1 以下は一律スケール、1 超は中間調ピボットを軸にコントラストを立てる。
-const DENSITY_PIVOT: f32 = 0.5;
-const DENSITY_CONTRAST: f32 = 1.2;
-
+// 1 以下は一律スケール、1 超は d' = 1 - (1-d)^density（薄い側は従来どおり、
+// 濃い側だけ天井へ漸近させてベタ潰れを防ぐ）。
 fn densityCurve(d: f32, density: f32) -> f32 {
   if (density <= 1.0) {
     return min(d * density, 1.0);
@@ -211,11 +139,7 @@ fn densityCurve(d: f32, density: f32) -> f32 {
   if (d >= 1.0) {
     return 1.0;
   }
-  let contrast = 1.0 + (density - 1.0) * DENSITY_CONTRAST;
-  if (d < DENSITY_PIVOT) {
-    return DENSITY_PIVOT * pow(d / DENSITY_PIVOT, contrast);
-  }
-  return 1.0 - (1.0 - DENSITY_PIVOT) * pow((1.0 - d) / (1.0 - DENSITY_PIVOT), contrast);
+  return 1.0 - pow(1.0 - d, density);
 }
 
 fn densityAt(dotRx: f32, dotRy: f32, inkIndex: u32) -> f32 {
@@ -663,8 +587,102 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
     (outputAlpha << 24u);
   outputPixels[pixelY * params.width + pixelX] = packed;
 }
-`,
-  });
+`;
+
+// シェーダのコンパイルとパイプライン生成はデバイスごとに 1 回で足りる（WGSL は定数、
+// layout も "auto" 固定）。毎描画で作り直すと、Discover のようにサムネを大量に描く
+// ときにサムネ 1 枚ごとにシェーダコンパイルを払うことになる。
+const compositePipelines = new WeakMap<GPUDevice, Promise<GPUComputePipeline>>();
+
+function getCompositePipeline(device: GPUDevice): Promise<GPUComputePipeline> {
+  let pipeline = compositePipelines.get(device);
+  if (!pipeline) {
+    pipeline = device.createComputePipelineAsync({
+      label: "stencil compositor pipeline",
+      layout: "auto",
+      compute: {
+        module: device.createShaderModule({
+          label: "stencil compositor shader",
+          code: COMPOSITE_SHADER,
+        }),
+        entryPoint: "composite",
+      },
+    });
+    // 失敗したらキャッシュに残さない（次回やり直せるように）
+    pipeline.catch(() => compositePipelines.delete(device));
+    compositePipelines.set(device, pipeline);
+  }
+  return pipeline;
+}
+
+export async function compositeFromDensityBuffer(
+  _device: GPUDevice,
+  _input: GpuComposeBufferInput
+): Promise<Uint8ClampedArray> {
+  const device = _device;
+  const input = _input;
+  const {
+    densityBuffer,
+    inkCount,
+    angles,
+    inkRgbs,
+    paper,
+    width,
+    height,
+    dotSize,
+    density,
+    inkOpacity,
+    halftoneMode,
+    transparentBg,
+    misregistration,
+    grain,
+    noise,
+    seed,
+    paperTexture,
+    paperTextureAmount,
+    renderScale,
+  } = input;
+
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 0 || height < 0) {
+    throw new Error("width and height must be non-negative integers");
+  }
+  if (!Number.isInteger(inkCount) || inkCount < 0) {
+    throw new Error("inkCount must be a non-negative integer");
+  }
+  if (inkCount !== angles.length || inkCount !== inkRgbs.length) {
+    throw new Error("inkCount, angles, and inkRgbs must have the same value");
+  }
+
+  const pixelCount = width * height;
+  if (!Number.isSafeInteger(pixelCount)) {
+    throw new Error("image dimensions are too large");
+  }
+  if (pixelCount === 0) return new Uint8ClampedArray();
+  if (!(dotSize > 0) || !Number.isFinite(dotSize)) {
+    throw new Error("dotSize must be a positive finite number");
+  }
+
+  const cellSize = halftoneMode === "am" ? dotSize + 2 : dotSize;
+  const dotRadius = dotSize * 0.5;
+  const ss = cellSize >= 9 ? 2 : cellSize >= 4.5 ? 3 : 4;
+  const searchRange = Math.max(1, Math.ceil(dotRadius / cellSize));
+  const outputByteLength = pixelCount * 4;
+  const densityByteLength = pixelCount * inkCount * Float32Array.BYTES_PER_ELEMENT;
+  const densityBindingSize = Math.max(4, densityByteLength);
+  const inkStrideFloats = 8;
+  const inkByteLength = inkCount * inkStrideFloats * Float32Array.BYTES_PER_ELEMENT;
+
+  if (
+    outputByteLength > device.limits.maxStorageBufferBindingSize ||
+    densityByteLength > device.limits.maxStorageBufferBindingSize ||
+    inkByteLength > device.limits.maxStorageBufferBindingSize
+  ) {
+    throw new Error("stencil input exceeds this device's storage-buffer limit");
+  }
+  if (densityBuffer.size < densityBindingSize) {
+    throw new Error("densityBuffer is smaller than the requested density data");
+  }
+
 
   const paramsBuffer = device.createBuffer({
     label: "stencil parameters",
@@ -733,11 +751,7 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
   });
 
   try {
-    const pipeline = await device.createComputePipelineAsync({
-      label: "stencil compositor pipeline",
-      layout: "auto",
-      compute: { module: shader, entryPoint: "composite" },
-    });
+    const pipeline = await getCompositePipeline(device);
     const bindGroup = device.createBindGroup({
       label: "stencil compositor resources",
       layout: pipeline.getBindGroupLayout(0),
@@ -752,6 +766,11 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
       ],
     });
 
+    // WebGPU の検証エラー/OOM は例外ではなく非同期に報告される。スコープで拾わないと
+    // 失敗したディスパッチの結果（ゼロ埋め等）を成功として返してしまい、
+    // 呼び出し側の CPU フォールバックが働かない。
+    device.pushErrorScope("validation");
+    device.pushErrorScope("out-of-memory");
     const encoder = device.createCommandEncoder({ label: "stencil compositor commands" });
     const pass = encoder.beginComputePass({ label: "stencil compositor pass" });
     pass.setPipeline(pipeline);
@@ -760,6 +779,13 @@ fn composite(@builtin(global_invocation_id) invocation: vec3<u32>) {
     pass.end();
     encoder.copyBufferToBuffer(outputBuffer, 0, readbackBuffer, 0, outputByteLength);
     device.queue.submit([encoder.finish()]);
+    const oomError = await device.popErrorScope();
+    const validationError = await device.popErrorScope();
+    if (oomError || validationError) {
+      throw new Error(
+        `WebGPU composite failed: ${(validationError ?? oomError)!.message}`
+      );
+    }
 
     await readbackBuffer.mapAsync(GPUMapMode.READ);
     const result = new Uint8ClampedArray(outputByteLength);
