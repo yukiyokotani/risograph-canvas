@@ -41,6 +41,8 @@ export interface StencilCanvasProps {
   noise?: number;
   transparentBg?: boolean;
   invert?: boolean;
+  /** トーンカーブ LUT（256×3）。色分解の手前で入力画像へ適用する。 */
+  toneLut?: Uint8Array;
   /**
    * 描画スケール。ドットサイズ・版ずれ・テクスチャ等を一律この倍率へ比例させる。
    * width を上げて内部解像度を上げつつ renderScale を同じ倍率にすると、見た目
@@ -84,6 +86,7 @@ export const StencilCanvas = forwardRef<
     noise = 0,
     transparentBg = false,
     invert = false,
+    toneLut,
     renderScale = 1,
     className,
     style,
@@ -159,7 +162,7 @@ export const StencilCanvas = forwardRef<
   // 処理パラメータのキーを生成し、完了キーと比較して processing を派生
   const paramsKey = [
     dotSize, density, inkOpacity, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, misregistration,
-    transparentBg, invert, paperColor, grain, renderScale,
+    transparentBg, invert, paperColor, grain, renderScale, toneLut,
     colors.map((c) => c.color).join(","),
   ].join("|");
   const [processedKey, setProcessedKey] = useState("");
@@ -168,11 +171,11 @@ export const StencilCanvas = forwardRef<
 
   // 最新パラメータを ref で保持
   const paramsRef = useRef({
-    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert, renderScale,
+    colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert, toneLut, renderScale,
   });
   useEffect(() => {
     paramsRef.current = {
-      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert, renderScale,
+      colors, dotSize, misregistration, grain, density, inkOpacity, paperColor, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, transparentBg, invert, toneLut, renderScale,
     };
   });
 
@@ -205,6 +208,7 @@ export const StencilCanvas = forwardRef<
             noise: p.noise,
             transparentBg: p.transparentBg,
             invert: p.invert,
+            toneLut: p.toneLut,
             renderScale: p.renderScale,
           });
           if (myRun !== renderRunRef.current) return; // 追い越された

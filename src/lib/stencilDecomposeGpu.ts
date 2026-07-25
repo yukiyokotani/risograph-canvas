@@ -36,6 +36,11 @@ struct Params {
   cutoffEnabled: u32,
   twoInkFit: u32,
 
+  toneEnabled: u32,
+  _tonePad0: u32,
+  _tonePad1: u32,
+  _tonePad2: u32,
+
   inkOpacity: f32,
   snapStrength: f32,
   blackGeneration: f32,
@@ -59,6 +64,8 @@ struct Params {
 @group(0) @binding(4) var<storage, read> lightnessTables: array<f32>;
 // Ink-major output: outputDensities[ink * pixelCount + pixel].
 @group(0) @binding(5) var<storage, read_write> outputDensities: array<f32>;
+// トーンカーブ LUT（256×3, R/G/B 順）。params.toneEnabled が 0 なら使わない。
+@group(0) @binding(6) var<storage, read> toneLut: array<u32>;
 
 fn smoothstepCpu(edge0: f32, edge1: f32, x: f32) -> f32 {
   let t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
@@ -173,9 +180,18 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
 
   let pixel = id.y * params.width + id.x;
   let packed = sourcePixels[pixel];
-  let rawR = f32(packed & 255u);
-  let rawG = f32((packed >> 8u) & 255u);
-  let rawB = f32((packed >> 16u) & 255u);
+  var srcR = packed & 255u;
+  var srcG = (packed >> 8u) & 255u;
+  var srcB = (packed >> 16u) & 255u;
+  // トーンカーブ（色分解の手前で入力を整える。CPU と同じ LUT を引く）
+  if (params.toneEnabled != 0u) {
+    srcR = toneLut[srcR];
+    srcG = toneLut[256u + srcG];
+    srcB = toneLut[512u + srcB];
+  }
+  let rawR = f32(srcR);
+  let rawG = f32(srcG);
+  let rawB = f32(srcB);
   let alphaByte = (packed >> 24u) & 255u;
   let alpha = f32(alphaByte) / 255.0;
 
@@ -619,9 +635,19 @@ export async function decomposeToGpuBuffer(
     );
   }
 
+  const toneLut = options.toneLut;
+  const toneEnabled = !!toneLut && toneLut.length >= 768;
+  // トーンカーブ LUT（未使用時もバインドは必要なので恒等を送る）
+  const toneData = new Uint32Array(768);
+  if (toneEnabled && toneLut) {
+    for (let i = 0; i < 768; i++) toneData[i] = toneLut[i];
+  } else {
+    for (let c = 0; c < 3; c++) for (let i = 0; i < 256; i++) toneData[c * 256 + i] = i;
+  }
+
   const paramsBuffer = device.createBuffer({
     label: "stencil decomposition parameters",
-    size: 80,
+    size: 96,
     usage: GPUBufferUsage.UNIFORM,
     mappedAtCreation: true,
   });
@@ -644,15 +670,26 @@ export async function decomposeToGpuBuffer(
   params.setUint32(36, snapEnabled ? 1 : 0, true);
   params.setUint32(40, highlightCutoff > 0 && highlightCutoff < 1 ? 1 : 0, true);
   params.setUint32(44, twoInkFit ? 1 : 0, true);
-  params.setFloat32(48, inkOpacity, true);
-  params.setFloat32(52, twoInkFit ? separation : separation * 1.5, true);
-  params.setFloat32(56, blackGeneration, true);
-  params.setFloat32(60, highlightCutoff, true);
-  params.setFloat32(64, paper.r, true);
-  params.setFloat32(68, paper.g, true);
-  params.setFloat32(72, paper.b, true);
-  params.setFloat32(76, separation, true);
+  params.setUint32(48, toneEnabled ? 1 : 0, true);
+  // 以降は toneEnabled + パディング 3 つ（16 バイト）ぶん後ろへずれる
+  params.setFloat32(64, inkOpacity, true);
+  params.setFloat32(68, twoInkFit ? separation : separation * 1.5, true);
+  params.setFloat32(72, blackGeneration, true);
+  params.setFloat32(76, highlightCutoff, true);
+  params.setFloat32(80, paper.r, true);
+  params.setFloat32(84, paper.g, true);
+  params.setFloat32(88, paper.b, true);
+  params.setFloat32(92, separation, true);
   paramsBuffer.unmap();
+
+  const toneBuffer = device.createBuffer({
+    label: "stencil tone curve lut",
+    size: toneData.byteLength,
+    usage: GPUBufferUsage.STORAGE,
+    mappedAtCreation: true,
+  });
+  new Uint32Array(toneBuffer.getMappedRange()).set(toneData);
+  toneBuffer.unmap();
 
   const sourceBuffer = device.createBuffer({
     label: "stencil decomposition source",
@@ -718,6 +755,7 @@ export async function decomposeToGpuBuffer(
         { binding: 3, resource: { buffer: precomputedBuffer } },
         { binding: 4, resource: { buffer: tableBuffer } },
         { binding: 5, resource: { buffer: outputBuffer } },
+        { binding: 6, resource: { buffer: toneBuffer } },
       ],
     });
 
@@ -755,6 +793,7 @@ export async function decomposeToGpuBuffer(
   } finally {
     paramsBuffer.destroy();
     sourceBuffer.destroy();
+    toneBuffer.destroy();
     metaBuffer.destroy();
     precomputedBuffer.destroy();
     tableBuffer.destroy();
