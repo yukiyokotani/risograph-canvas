@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   StencilCanvas,
   type StencilCanvasHandle,
 } from "./components/StencilCanvas";
-import { INKS, PRESETS } from "./presets";
+import { INK_GROUPS, PRESETS } from "./presets";
 import { hexToRgb, rgbToLab } from "./lib/color";
 import {
   getGpuDevice,
@@ -156,7 +157,6 @@ async function saveImageFromCanvas(
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const inkEntries = Object.entries(INKS);
 const presetEntries = Object.entries(PRESETS);
 
 /** 与えられたインク列と完全に一致するプリセットのキー（無ければ ""） */
@@ -169,6 +169,17 @@ function matchPresetKey(colors: readonly StencilColor[]): string {
   }
   return "";
 }
+
+/** Halftone セクションの既定値（state の初期値とリセットで共有する） */
+const HALFTONE_DEFAULTS = {
+  colorMode: "natural" as ColorMode,
+  halftoneMode: "am" as HalftoneMode,
+  dotSize: 0.5,
+  density: 1.5,
+  gamutCutoff: 0.5,
+  blackGeneration: 0.7,
+  highlightCutoff: 0,
+};
 
 const PAPER_COLORS = [
   { name: "White", color: "#ffffff" },
@@ -229,7 +240,7 @@ const guide = {
       },
       {
         heading: "Highlight cutoff",
-        body: "Drops the faintest tones below the threshold so near-white areas stay clean (removes stray dots from JPEG noise or anti-aliasing). Tones above the threshold are remapped so dots still grow from tiny — the highlight gradient stays size-modulated rather than turning into scattered dots.",
+        body: "Blows out the highlights: ink is pulled back across the light end so near-white areas open up. Rather than cutting the faint tones off, it rolls them down smoothly, so highlights thin out into many progressively smaller dots instead of leaving a few isolated ones that read as noise. The very faintest tones still fall away, which keeps stray dots from JPEG noise or anti-aliasing out of near-white areas.",
       },
       {
         heading: "Toolbar",
@@ -298,7 +309,7 @@ const guide = {
       },
       {
         heading: "ハイライトのクリップ (Highlight cutoff)",
-        body: "しきい値未満のごく薄い階調を落として、ほぼ白の領域を綺麗に保ちます（JPEG ノイズや反アリアス由来の網点の散りを除去）。しきい値以上は再マップされ、点がゼロから滑らかに育つため、ハイライトの勾配が「点の散り」ではなくサイズ変調で表現されます。",
+        body: "ハイライトを飛ばします。薄い側のインクを引いて、ほぼ白の領域を抜けさせます。薄い階調を切り捨てるのではなく滑らかに絞るので、ハイライトは「たくさんの小さな点」になって飛んでいきます（切り捨てると濃い点だけが白地に孤立して残り、階調ではなくノイズに見えます）。ごく薄い階調は消えるので、JPEG ノイズや反アリアス由来の点を掃除する役割も保たれます。",
       },
       {
         heading: "ツールバー (Toolbar)",
@@ -423,6 +434,13 @@ function AddInkColorPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState("#3366cc");
+  // 色名のヒント。ポップオーバー内はスクロール領域で切られるので、
+  // 画面座標を持って body 直下（ポータル）に固定配置で出す。
+  const [hint, setHint] = useState<{ name: string; x: number; y: number } | null>(null);
+  const showHint = (el: HTMLElement, name: string) => {
+    const r = el.getBoundingClientRect();
+    setHint({ name, x: r.left + r.width / 2, y: r.top });
+  };
 
   const addCustom = () => {
     let v = custom.trim();
@@ -434,7 +452,13 @@ function AddInkColorPicker({
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setHint(null);
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -446,22 +470,37 @@ function AddInkColorPicker({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-3" align="start">
-        {/* プリセットのインクパレット（候補） */}
-        <div className="mb-2 max-h-40 overflow-y-auto">
-          <div className="flex flex-wrap gap-1.5">
-            {inkEntries.map(([key, ink]) => (
-              <button
-                key={key}
-                title={ink.name}
-                onClick={() => {
-                  onAdd({ ...ink });
-                  setOpen(false);
-                }}
-                className="h-7 w-7 rounded-full border-2 border-transparent shadow-sm transition-colors hover:border-ring"
-                style={{ background: ink.color }}
-              />
-            ))}
-          </div>
+        {/* プリセットのインクパレット（候補）。モノトーン / 色 / 蛍光 で分け、
+            色の組は色相順に並べる（スペクトラムになり狙った色を探しやすい）。 */}
+        <div
+          className="thin-scroll mb-2 max-h-56 overflow-y-auto pr-1"
+          onScroll={() => setHint(null)}
+        >
+          {INK_GROUPS.map((group) => (
+            <div key={group.label} className="mb-2 last:mb-0">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                {group.label}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {group.entries.map(([key, ink]) => (
+                  <button
+                    key={key}
+                    aria-label={ink.name}
+                    onClick={() => {
+                      onAdd({ ...ink });
+                      setOpen(false);
+                    }}
+                    onMouseEnter={(e) => showHint(e.currentTarget, ink.name)}
+                    onMouseLeave={() => setHint(null)}
+                    onFocus={(e) => showHint(e.currentTarget, ink.name)}
+                    onBlur={() => setHint(null)}
+                    className="h-7 w-7 rounded-full border-2 border-transparent shadow-sm transition-colors hover:border-ring focus-visible:border-ring"
+                    style={{ background: ink.color }}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
         <Separator className="mb-2" />
         {/* 任意の色（スペクトラム + HEX） */}
@@ -492,6 +531,17 @@ function AddInkColorPicker({
           </Button>
         </div>
       </PopoverContent>
+      {hint &&
+        createPortal(
+          <div
+            role="tooltip"
+            className="pointer-events-none fixed z-[100] -translate-x-1/2 -translate-y-full whitespace-nowrap rounded bg-foreground px-1.5 py-0.5 text-[10px] leading-tight text-background shadow"
+            style={{ left: hint.x, top: hint.y - 6 }}
+          >
+            {hint.name}
+          </div>,
+          document.body
+        )}
     </Popover>
   );
 }
@@ -501,19 +551,19 @@ function App() {
   const [colors, setColors] = useState<StencilColor[]>([
     ...PRESETS.tricolor.colors,
   ]);
-  const [dotSize, setDotSize] = useState(0.5);
+  const [dotSize, setDotSize] = useState(HALFTONE_DEFAULTS.dotSize);
   const [misregistration, setMisregistration] = useState(2);
-  const [density, setDensity] = useState(1.5);
+  const [density, setDensity] = useState(HALFTONE_DEFAULTS.density);
   const [inkOpacity, setInkOpacity] = useState(0.75);
   const [paperColor, setPaperColor] = useState("#f5f0e8");
   const [noise, setNoise] = useState(0);
   const [transparentBg, setTransparentBg] = useState(false);
   const [invert, setInvert] = useState(false);
-  const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>("am");
-  const [colorMode, setColorMode] = useState<ColorMode>("natural");
-  const [gamutCutoff, setGamutCutoff] = useState(0.5);
-  const [blackGeneration, setBlackGeneration] = useState(0.7);
-  const [highlightCutoff, setHighlightCutoff] = useState(0);
+  const [halftoneMode, setHalftoneMode] = useState<HalftoneMode>(HALFTONE_DEFAULTS.halftoneMode);
+  const [colorMode, setColorMode] = useState<ColorMode>(HALFTONE_DEFAULTS.colorMode);
+  const [gamutCutoff, setGamutCutoff] = useState(HALFTONE_DEFAULTS.gamutCutoff);
+  const [blackGeneration, setBlackGeneration] = useState(HALFTONE_DEFAULTS.blackGeneration);
+  const [highlightCutoff, setHighlightCutoff] = useState(HALFTONE_DEFAULTS.highlightCutoff);
   const [paperTexture, setPaperTexture] = useState<PaperTexture>("none");
   const [paperTextureAmount, setPaperTextureAmount] = useState(0.5);
   const [downloadScale, setDownloadScale] = useState("1");
@@ -741,6 +791,26 @@ function App() {
       setPresetKey(key);
       setColors([...preset.colors]);
     }
+  };
+
+  /** Halftone セクションだけを既定値に戻す */
+  const halftoneIsDefault =
+    colorMode === HALFTONE_DEFAULTS.colorMode &&
+    halftoneMode === HALFTONE_DEFAULTS.halftoneMode &&
+    dotSize === HALFTONE_DEFAULTS.dotSize &&
+    density === HALFTONE_DEFAULTS.density &&
+    gamutCutoff === HALFTONE_DEFAULTS.gamutCutoff &&
+    blackGeneration === HALFTONE_DEFAULTS.blackGeneration &&
+    highlightCutoff === HALFTONE_DEFAULTS.highlightCutoff;
+
+  const resetHalftone = () => {
+    setColorMode(HALFTONE_DEFAULTS.colorMode);
+    setHalftoneMode(HALFTONE_DEFAULTS.halftoneMode);
+    setDotSize(HALFTONE_DEFAULTS.dotSize);
+    setDensity(HALFTONE_DEFAULTS.density);
+    setGamutCutoff(HALFTONE_DEFAULTS.gamutCutoff);
+    setBlackGeneration(HALFTONE_DEFAULTS.blackGeneration);
+    setHighlightCutoff(HALFTONE_DEFAULTS.highlightCutoff);
   };
 
   const addColor = (color: StencilColor) => {
@@ -1363,7 +1433,10 @@ function App() {
                   </button>
                 </Badge>
               ))}
-              <AddInkColorPicker onAdd={addColor} />
+              <AddInkColorPicker
+                onAdd={addColor}
+                disabled={colors.length >= MAX_INKS}
+              />
             </div>
             <div className="mt-3">
               <Label className="mb-2 text-xs text-muted-foreground">Opacity</Label>
@@ -1386,9 +1459,19 @@ function App() {
 
           {/* Halftone */}
           <section className="mb-6">
-            <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Halftone
-            </p>
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Halftone
+              </p>
+              {!halftoneIsDefault && (
+                <button
+                  className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  onClick={resetHalftone}
+                >
+                  <RotateCcw className="h-3 w-3" /> Reset
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 lg:grid-cols-2">
               <div>
                 <Label className="mb-2 text-xs text-muted-foreground">Separation</Label>
