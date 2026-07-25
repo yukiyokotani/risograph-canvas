@@ -200,6 +200,10 @@ export const PRESETS = {
     name: "Fl. Pink + Fl. Yellow",
     colors: [INKS.fluorescentPink, INKS.fluorescentYellow],
   },
+  fluorYellowBlue: {
+    name: "Fl. Yellow + Fl. Blue",
+    colors: [INKS.fluorescentYellow, INKS.fluorescentBlue],
+  },
 } as const satisfies Record<
   string,
   { name: string; colors: readonly StencilColor[] }
