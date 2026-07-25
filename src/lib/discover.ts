@@ -172,7 +172,7 @@ const PRESET_COMBOS: Combo[] = Object.values(PRESETS).map((p) => ({
     .filter((k): k is keyof typeof INKS => Boolean(k)),
 }));
 const EXTRA_COMBOS: Combo[] = [
-  { label: "Fl. Blue + Fl. Yellow", keys: ["fluorescentBlue", "fluorescentYellow"] },
+  // Fl. Yellow + Fl. Blue はプリセットに入ったので、ここでは重複させない
   { label: "Blue + Fl. Orange", keys: ["blue", "fluorescentOrange"] },
   { label: "Teal + Fl. Pink", keys: ["teal", "fluorescentPink"] },
   { label: "Purple + Yellow", keys: ["purple", "yellow"] },
