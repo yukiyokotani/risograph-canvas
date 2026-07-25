@@ -9,13 +9,15 @@ import {
   type ImageDataLike,
 } from "../lib/stencil";
 import { renderStencilPixels } from "../lib/stencilRenderer";
-import { buildToneLut, INVERT_CURVES } from "../lib/curve";
+import { buildToneLut, INVERT_CURVES, type ToneCurves } from "../lib/curve";
+import type { StencilSettings } from "../lib/settings";
 import {
   analyzeSource,
   generateCandidates,
   mutate,
   scoreRender,
   candidateSignature,
+  candidateFromSettings,
   paletteKey,
   DISCOVER_FIXED,
   THUMB_RENDER_WIDTH,
@@ -31,6 +33,16 @@ import {
 /** 黒紙の候補で使う反転カーブ（旧 invert 相当）を 1 度だけ焼いておく */
 const INVERT_LUT = buildToneLut(INVERT_CURVES);
 
+/**
+ * 「今の表示」から作った候補が持つトーンカーブの LUT。similar は base のカーブを
+ * そのまま引き継ぐので、同じ curves オブジェクトなら焼き直さず使い回す。
+ */
+const lutCache = new WeakMap<ToneCurves, Uint8Array | undefined>();
+function lutFor(curves: ToneCurves): Uint8Array | undefined {
+  if (!lutCache.has(curves)) lutCache.set(curves, buildToneLut(curves));
+  return lutCache.get(curves);
+}
+
 const PAGE = 48; // 1 回の補充で生成する候補数（この中から重複と潰れを落として採用する）
 const MAX_ITEMS = 240; // 実質的なバリエーションは有限なので、この辺りで打ち切る
 const OVERSCAN_ROWS = 2;
@@ -44,6 +56,8 @@ export interface DiscoverDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   imageSrc: string;
+  /** 今メイン画面に出ている設定。グリッド先頭の候補として並べ、開いた時点で選択する。 */
+  current: StencilSettings;
   onApply: (cand: Candidate) => void;
 }
 
@@ -63,14 +77,14 @@ function buildOptions(cand: Candidate, srcWidth: number): StencilOptions {
     inkOpacity: cand.inkOpacity,
     paperColor: cand.paperColor,
     halftoneMode: cand.halftoneMode,
-    separation: DISCOVER_FIXED.separation,
-    blackGeneration: DISCOVER_FIXED.blackGeneration,
+    separation: cand.separation,
+    blackGeneration: cand.blackGeneration ?? DISCOVER_FIXED.blackGeneration,
     highlightCutoff: cand.highlightCutoff,
     paperTexture: cand.paperTexture,
-    paperTextureAmount: DISCOVER_FIXED.paperTextureAmount,
-    noise: DISCOVER_FIXED.noise,
-    transparentBg: false,
-    toneLut: cand.invert ? INVERT_LUT : undefined,
+    paperTextureAmount: cand.paperTextureAmount ?? DISCOVER_FIXED.paperTextureAmount,
+    noise: cand.noise ?? DISCOVER_FIXED.noise,
+    transparentBg: cand.transparentBg ?? false,
+    toneLut: cand.curves ? lutFor(cand.curves) : cand.invert ? INVERT_LUT : undefined,
     renderScale: srcWidth / PREVIEW_BASE_WIDTH,
   };
 }
@@ -131,8 +145,11 @@ function SelectionMark() {
   );
 }
 
-export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: DiscoverDialogProps) {
+export function DiscoverDialog({ open, onOpenChange, imageSrc, current, onApply }: DiscoverDialogProps) {
   const sourceRef = useRef<ImageDataLike | null>(null);
+  // 開いた瞬間の設定だけ使いたい（毎レンダ新しい object なので effect の依存には入れない）
+  const currentRef = useRef(current);
+  currentRef.current = current;
   // 足切り用の小さいソース（下見レンダの採点に使う）
   const screenSrcRef = useRef<ImageDataLike | null>(null);
   const statsRef = useRef<SourceStats | null>(null);
@@ -367,12 +384,18 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, onApply }: Discov
         seenSigRef.current = new Set();
         paletteCountRef.current = new Map();
         candCountRef.current = 0;
-        setSelectedId(null);
         setSimilar([]);
-        setSimilarSelectedId(null);
         setScrollTop(0);
         if (scrollElRef.current) scrollElRef.current.scrollTop = 0;
-        setCandidates([]);
+        // 先頭は「今の表示」。開いた時点で選択済みにして、常に similar を出す。
+        const cur = candidateFromSettings(currentRef.current);
+        seenSigRef.current.add(candidateSignature(cur));
+        paletteCountRef.current.set(paletteKey(cur), 1);
+        candCountRef.current = 1;
+        setCandidates([cur]);
+        setSelectedId(cur.id);
+        setSimilarSelectedId(cur.id);
+        selectMain(cur);
         produce(PAGE);
       })
       .catch(() => {});
