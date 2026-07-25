@@ -72,8 +72,8 @@ export interface CurvesDialogProps {
 }
 
 /**
- * トーンカーブのアイコン。S 字の三次曲線に、両端と中点のアンカーを置いたもの
- * （カラコレ系ツールのカーブアイコンの定番の形）。
+ * トーンカーブのアイコン。4 つのアンカーを「上って・下って・上って」と通る曲線。
+ * 山と谷を 1 つずつ持つので、変曲点が 2 つできる。
  */
 export function CurvesIcon({ className }: { className?: string }) {
   return (
@@ -83,13 +83,15 @@ export function CurvesIcon({ className }: { className?: string }) {
       stroke="currentColor"
       strokeWidth={2}
       strokeLinecap="round"
+      strokeLinejoin="round"
       className={className}
       aria-hidden="true"
     >
-      <path d="M3 21C9 21 15 3 21 3" />
-      <circle cx="3" cy="21" r="2" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
-      <circle cx="21" cy="3" r="2" fill="currentColor" stroke="none" />
+      <path d="M3 15C5 11 7 8 9 8C11 8 13 16 15 16C17 16 19 13 21 9" />
+      <circle cx="3" cy="15" r="1.8" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="8" r="1.8" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="16" r="1.8" fill="currentColor" stroke="none" />
+      <circle cx="21" cy="9" r="1.8" fill="currentColor" stroke="none" />
     </svg>
   );
 }
