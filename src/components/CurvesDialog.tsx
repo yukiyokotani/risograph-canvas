@@ -73,7 +73,8 @@ export interface CurvesDialogProps {
 
 /**
  * トーンカーブのアイコン。1 本の三次ベジェで描いた S 字（両端が寝て中央が立つ）に、
- * 始点と終点のアンカーを置いたもの。
+ * 始点と終点のアンカー（中抜きの丸）を置いたもの。線は丸の手前で止める
+ * （中心まで引くと丸の中を線が横切り、リングが欠けて見える）。
  */
 export function CurvesIcon({ className }: { className?: string }) {
   return (
@@ -87,9 +88,9 @@ export function CurvesIcon({ className }: { className?: string }) {
       className={className}
       aria-hidden="true"
     >
-      <path d="M4.5 20C10 20 14 4 19.5 4" />
-      <circle cx="4.5" cy="20" r="2.4" fill="currentColor" stroke="none" />
-      <circle cx="19.5" cy="4" r="2.4" fill="currentColor" stroke="none" />
+      <path d="M7.6 20C11 20 13 4 16.4 4" />
+      <circle cx="4.5" cy="20" r="2.4" fill="none" />
+      <circle cx="19.5" cy="4" r="2.4" fill="none" />
     </svg>
   );
 }
