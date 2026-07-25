@@ -4,6 +4,7 @@ import { rgbToLab, hexToRgb, luminance } from "./color";
 import {
   buildLightnessTable,
   coverageForLightness,
+  highlightRolloff,
   computeInkDensities,
   type ImageDataLike,
   type StencilOptions,
@@ -81,6 +82,48 @@ describe("densityCurve", () => {
     for (const d of [0.05, 0.1, 0.2]) {
       expect(densityCurve(d, 1.5)).toBeCloseTo(Math.min(d * 1.5, 1), 1);
     }
+  });
+});
+
+describe("highlightRolloff", () => {
+  it("cutoff=0 は何もしない", () => {
+    for (const d of [0, 0.05, 0.5, 1]) {
+      expect(highlightRolloff(d, 0)).toBe(d);
+    }
+  });
+
+  it("薄い階調を 0 に切り捨てず、小さい値として残す", () => {
+    // 従来は d <= cutoff を一律 0 にしていた（点が丸ごと消えていた）
+    for (const d of [0.05, 0.15, 0.29]) {
+      const v = highlightRolloff(d, 0.3);
+      expect(v).toBeGreaterThan(0);
+      expect(v).toBeLessThan(d); // ハイライトは飛ぶ（薄くなる）
+    }
+  });
+
+  it("薄いほど強く絞られる（単調で、順序が保たれる）", () => {
+    let prev = -1;
+    for (let i = 0; i <= 40; i++) {
+      const v = highlightRolloff(i / 40, 0.3);
+      expect(v).toBeGreaterThanOrEqual(prev);
+      prev = v;
+    }
+    // 相対的な減り方は薄い側ほど大きい
+    const faint = highlightRolloff(0.05, 0.3) / 0.05;
+    const mid = highlightRolloff(0.25, 0.3) / 0.25;
+    expect(faint).toBeLessThan(mid);
+  });
+
+  it("cutoff の 2 倍以上では従来の式と一致する", () => {
+    const cutoff = 0.3;
+    for (const d of [0.6, 0.8, 1]) {
+      expect(highlightRolloff(d, cutoff)).toBeCloseTo((d - cutoff) / (1 - cutoff), 12);
+    }
+  });
+
+  it("0 と 1 の端は保たれる", () => {
+    expect(highlightRolloff(0, 0.3)).toBe(0);
+    expect(highlightRolloff(1, 0.3)).toBeCloseTo(1, 12);
   });
 });
 

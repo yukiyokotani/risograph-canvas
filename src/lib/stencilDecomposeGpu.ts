@@ -402,14 +402,22 @@ fn decompose(@builtin(global_invocation_id) id: vec3<u32>) {
     }
   }
 
+  // ハイライトのロールオフ（CPU の highlightRolloff と同じ定義）。
+  // しきい値以下を 0 に切り捨てず、下端をソフトニーで 0 へ接続する。
+  // 乗除算だけなので CPU と数値が厳密に一致する。
   if (params.cutoffEnabled != 0u) {
-    let inverseRange = 1.0 / (1.0 - params.highlightCutoff);
+    let cutoff = params.highlightCutoff;
     for (var i = 0u; i < params.inkCount; i++) {
       let value = densities[i];
-      if (value <= params.highlightCutoff) {
+      if (value <= 0.0) {
         densities[i] = 0.0;
       } else {
-        densities[i] = (value - params.highlightCutoff) * inverseRange;
+        let y = value - cutoff;
+        var soft = y;
+        if (y < cutoff) {
+          soft = ((y + cutoff) * (y + cutoff)) / (4.0 * cutoff);
+        }
+        densities[i] = soft / (1.0 - cutoff);
       }
     }
   }

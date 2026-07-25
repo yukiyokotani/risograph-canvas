@@ -229,7 +229,7 @@ const guide = {
       },
       {
         heading: "Highlight cutoff",
-        body: "Drops the faintest tones below the threshold so near-white areas stay clean (removes stray dots from JPEG noise or anti-aliasing). Tones above the threshold are remapped so dots still grow from tiny — the highlight gradient stays size-modulated rather than turning into scattered dots.",
+        body: "Blows out the highlights: ink is pulled back across the light end so near-white areas open up. Rather than cutting the faint tones off, it rolls them down smoothly, so highlights thin out into many progressively smaller dots instead of leaving a few isolated ones that read as noise. The very faintest tones still fall away, which keeps stray dots from JPEG noise or anti-aliasing out of near-white areas.",
       },
       {
         heading: "Toolbar",
@@ -298,7 +298,7 @@ const guide = {
       },
       {
         heading: "ハイライトのクリップ (Highlight cutoff)",
-        body: "しきい値未満のごく薄い階調を落として、ほぼ白の領域を綺麗に保ちます（JPEG ノイズや反アリアス由来の網点の散りを除去）。しきい値以上は再マップされ、点がゼロから滑らかに育つため、ハイライトの勾配が「点の散り」ではなくサイズ変調で表現されます。",
+        body: "ハイライトを飛ばします。薄い側のインクを引いて、ほぼ白の領域を抜けさせます。薄い階調を切り捨てるのではなく滑らかに絞るので、ハイライトは「たくさんの小さな点」になって飛んでいきます（切り捨てると濃い点だけが白地に孤立して残り、階調ではなくノイズに見えます）。ごく薄い階調は消えるので、JPEG ノイズや反アリアス由来の点を掃除する役割も保たれます。",
       },
       {
         heading: "ツールバー (Toolbar)",

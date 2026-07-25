@@ -387,6 +387,35 @@ function decomposeColors(
   return { maps, residuals };
 }
 
+/**
+ * ハイライトのロールオフ（Highlight cutoff スライダ）。
+ *
+ * しきい値の分だけ濃度を差し引いて残りを引き伸ばす（＝ハイライトを飛ばす）点は
+ * 従来と同じだが、**下端の崖をソフトニーにする**:
+ *
+ *     y = d − cutoff
+ *     y ≥ cutoff : soft = y                       … 従来と完全に同じ
+ *     それ以外   : soft = (y + cutoff)² / (4·cutoff)  … 0 へ滑らかに接続
+ *     d' = soft / (1 − cutoff)
+ *
+ * 従来は `d ≤ cutoff` を一律 0 にしていたため、ハイライトの細かい濃淡がまとめて
+ * 消える一方で元々濃かった画素だけが白地に孤立して残り、階調ではなく
+ * 「ぽつぽつしたノイズ」に見えていた。ソフトニーなら薄い所ほど強く小さくなりつつ
+ * 点自体は残るので、「たくさんの小さな点でハイライトが飛んでいく」表現になる。
+ * ごく薄い画素は網点側の下限（0.001）を下回って消えるため、JPEG ノイズ由来の
+ * 点を掃除する従来の役割も保たれる。
+ *
+ * cutoff の 2 倍以上の濃度では従来と数値が一致し、全体は単調な C1 連続関数。
+ * 乗除算だけで書けるので GPU 実装と数値が厳密に一致する。
+ */
+export function highlightRolloff(d: number, cutoff: number): number {
+  if (cutoff <= 0 || cutoff >= 1) return d;
+  if (d <= 0) return 0;
+  const y = d - cutoff;
+  const soft = y >= cutoff ? y : ((y + cutoff) * (y + cutoff)) / (4 * cutoff);
+  return soft / (1 - cutoff);
+}
+
 const smoothstep = (a: number, b: number, x: number): number => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
@@ -868,11 +897,10 @@ export function computeStencil(
   // 代わりに [cutoff, 1] を [0, 1] へ線形リマップし、しきい値直上を極小ドットから
   // 滑らかにサイズ成長させる（＝ AM のサイズ変調でハイライトの勾配を表現する）。
   if (highlightCutoff > 0 && highlightCutoff < 1) {
-    const invRange = 1 / (1 - highlightCutoff);
     for (let ci = 0; ci < densityMaps.length; ci++) {
       const m = densityMaps[ci];
       for (let p = 0; p < pixelCount; p++) {
-        m[p] = m[p] <= highlightCutoff ? 0 : (m[p] - highlightCutoff) * invRange;
+        m[p] = highlightRolloff(m[p], highlightCutoff);
       }
     }
   }
