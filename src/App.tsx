@@ -6,6 +6,7 @@ import {
 import { INKS, PRESETS } from "./presets";
 import { hexToRgb, rgbToLab } from "./lib/color";
 import { getGpuDevice, renderStencilPixels } from "./lib/stencilRenderer";
+import { MAX_INKS } from "./lib/stencilDecomposeGpu";
 import {
   loadImage,
   getImageData,
@@ -398,8 +399,10 @@ function PaperColorPicker({
  */
 function AddInkColorPicker({
   onAdd,
+  disabled,
 }: {
   onAdd: (color: StencilColor) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState("#3366cc");
@@ -416,7 +419,12 @@ function AddInkColorPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="outline" className="h-9 text-xs">
+        <Button
+          variant="outline"
+          className="h-9 text-xs"
+          disabled={disabled}
+          title={disabled ? `Up to ${MAX_INKS} inks` : undefined}
+        >
           + Add
         </Button>
       </PopoverTrigger>
@@ -698,6 +706,9 @@ function App() {
   };
 
   const addColor = (color: StencilColor) => {
+    // 上限を超えると GPU 分解が毎フレーム例外を投げ、CPU へ落ちて重くなる。
+    // スクリーン角度の表も 8 本しかなく、9 本目からは角度が重複してモアレになる。
+    if (colors.length >= MAX_INKS) return;
     setColors((prev) => [...prev, color]);
     setPresetKey(""); // プリセットから外れたので選択を解除
   };

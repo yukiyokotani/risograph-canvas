@@ -805,8 +805,13 @@ export function computeStencil(
   }
 
   const pixelCount = width * height;
+  // 2色 Natural は乗算モデルへ直接フィットするので snap を通らない（＝残差を使わない）。
+  // 残差は上限なし NNLS を別途 8 回まわして求めるので、要るときだけ計算する。
+  const useTwoInkFit =
+    colorMode !== "bold" && inkRgbs.length === 2 && decompIndexMap.length === 2;
+  const needResidual = !useTwoInkFit && decompIndexMap.length >= 2;
   const decomp = decompInks.length > 0
-    ? decomposeColors(source, decompInks, WHITE, true)
+    ? decomposeColors(source, decompInks, WHITE, needResidual)
     : { maps: [] as Float32Array[], residuals: new Float32Array(pixelCount) };
   const decompMaps = decomp.maps;
   const residuals = decomp.residuals;
@@ -834,7 +839,7 @@ export function computeStencil(
   // 色分解の後処理: ガモット外の彩度高色を「混色の濁り」ではなく支配的インク単色へ
   // 寄せて明度・彩度を保つ（緑→澄んだ青 等）。Natural でも濁りを除去し、Bold はより
   // 積極的に分離する。Bold の分離強度は gamutThreshold（0-1）で調整できる。
-  if (colorMode !== "bold" && inkRgbs.length === 2 && decompIndexMap.length === 2) {
+  if (useTwoInkFit) {
     // 2色 × Natural: 加法 NNLS の代わりに乗算モデルへ直接フィット（snap 不要・連続）。
     // Bold・3色以上・GCR 構成には触れない（従来の snap を使う）。
     applyTwoInkNaturalFit(densityMaps, decompIndexMap, source, paper, inkRgbs, inkOpacity);
