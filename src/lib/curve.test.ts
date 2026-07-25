@@ -85,6 +85,47 @@ describe("buildToneLut", () => {
   });
 });
 
+describe("効き具合 (amounts)", () => {
+  const sCurve: CurvePoint[] = [
+    { x: 0, y: 0 },
+    { x: 0.25, y: 0.1 },
+    { x: 0.75, y: 0.9 },
+    { x: 1, y: 1 },
+  ];
+
+  it("0 なら素通し（恒等）", () => {
+    const lut = buildToneLut({
+      ...IDENTITY_CURVES,
+      rgb: sCurve,
+      amounts: { rgb: 0, r: 1, g: 1, b: 1 },
+    });
+    for (let i = 0; i < 256; i++) expect(lut[i]).toBe(i);
+  });
+
+  it("1 ならカーブそのまま、途中は恒等との間に入る", () => {
+    const full = buildToneLut({ ...IDENTITY_CURVES, rgb: sCurve });
+    const half = buildToneLut({
+      ...IDENTITY_CURVES,
+      rgb: sCurve,
+      amounts: { rgb: 0.5, r: 1, g: 1, b: 1 },
+    });
+    const i = 64; // カーブが恒等より下がる位置
+    expect(full[i]).toBeLessThan(i);
+    expect(half[i]).toBeGreaterThan(full[i]);
+    expect(half[i]).toBeLessThan(i);
+  });
+
+  it("効き 0 のチャンネルは恒等として扱われる", () => {
+    expect(
+      isIdentityCurves({
+        ...IDENTITY_CURVES,
+        rgb: sCurve,
+        amounts: { rgb: 0, r: 1, g: 1, b: 1 },
+      })
+    ).toBe(true);
+  });
+});
+
 describe("isIdentityCurves", () => {
   it("未設定・恒等は true、点を動かすと false", () => {
     expect(isIdentityCurves(undefined)).toBe(true);

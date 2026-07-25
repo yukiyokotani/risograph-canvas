@@ -15,12 +15,30 @@ export interface CurvePoint {
   y: number;
 }
 
-/** RGB 一括と各チャンネルのカーブ。空配列（＝両端のみ）は恒等。 */
+/** チャンネルごとの効き具合（0–1）。0 で恒等、1 で設定したカーブそのまま。 */
+export interface CurveAmounts {
+  rgb: number;
+  r: number;
+  g: number;
+  b: number;
+}
+
+/** RGB 一括と各チャンネルのカーブ。両端のみ（または効き 0）は恒等。 */
 export interface ToneCurves {
   rgb: CurvePoint[];
   r: CurvePoint[];
   g: CurvePoint[];
   b: CurvePoint[];
+  /** 省略時は 1（＝カーブをそのまま適用） */
+  amounts?: CurveAmounts;
+}
+
+export const FULL_AMOUNTS: CurveAmounts = { rgb: 1, r: 1, g: 1, b: 1 };
+
+/** 効き具合を安全に取り出す（未設定・不正値は 1 とみなす） */
+export function amountOf(curves: ToneCurves, key: keyof CurveAmounts): number {
+  const v = curves.amounts?.[key];
+  return typeof v === "number" && v >= 0 && v <= 1 ? v : 1;
 }
 
 /** 端点だけの恒等カーブ */
@@ -53,11 +71,13 @@ export const IDENTITY_CURVES: ToneCurves = {
 /** すべてのチャンネルが恒等か（＝カーブを適用する必要が無いか） */
 export function isIdentityCurves(curves: ToneCurves | undefined): boolean {
   if (!curves) return true;
+  const flat = (points: CurvePoint[], key: keyof CurveAmounts) =>
+    isIdentityChannel(points) || amountOf(curves, key) === 0;
   return (
-    isIdentityChannel(curves.rgb) &&
-    isIdentityChannel(curves.r) &&
-    isIdentityChannel(curves.g) &&
-    isIdentityChannel(curves.b)
+    flat(curves.rgb, "rgb") &&
+    flat(curves.r, "r") &&
+    flat(curves.g, "g") &&
+    flat(curves.b, "b")
   );
 }
 
@@ -165,11 +185,21 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
  * 一括カーブを先に通してからチャンネル別を通す（Photoshop 等と同じ順序）。
  */
 export function buildToneLut(curves: ToneCurves): Uint8Array {
-  const rgb = buildCurveLut(curves.rgb);
+  // 効き具合は「恒等とカーブの補間」。0 で素通し、1 でカーブそのまま。
+  const withAmount = (lut: Float32Array, amount: number) => {
+    if (amount >= 1) return lut;
+    const out = new Float32Array(lut.length);
+    for (let i = 0; i < lut.length; i++) {
+      const identity = i / (lut.length - 1);
+      out[i] = identity + (lut[i] - identity) * amount;
+    }
+    return out;
+  };
+  const rgb = withAmount(buildCurveLut(curves.rgb), amountOf(curves, "rgb"));
   const per = [
-    buildCurveLut(curves.r),
-    buildCurveLut(curves.g),
-    buildCurveLut(curves.b),
+    withAmount(buildCurveLut(curves.r), amountOf(curves, "r")),
+    withAmount(buildCurveLut(curves.g), amountOf(curves, "g")),
+    withAmount(buildCurveLut(curves.b), amountOf(curves, "b")),
   ];
   const out = new Uint8Array(256 * 3);
   for (let c = 0; c < 3; c++) {

@@ -3,13 +3,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import {
   buildCurveLut,
+  amountOf,
+  FULL_AMOUNTS,
   IDENTITY_POINTS,
   INVERT_POINTS,
   type CurvePoint,
   type ToneCurves,
 } from "../lib/curve";
+import { Slider } from "./ui/slider";
 
-type ChannelKey = keyof ToneCurves;
+type ChannelKey = "rgb" | "r" | "g" | "b";
 
 const CHANNELS: {
   key: ChannelKey;
@@ -88,7 +91,13 @@ export function CurvesDialog({
   });
 
   const curvePath = useMemo(() => {
-    const lut = buildCurveLut(points, 128);
+    const raw = buildCurveLut(points, 128);
+    // 効き具合を反映した実効カーブを描く（グラフと結果を一致させる）
+    const a = amountOf(curves, channel);
+    const lut = raw.map((v, i) => {
+      const identity = i / (raw.length - 1);
+      return identity + (v - identity) * a;
+    });
     let d = "";
     for (let i = 0; i < lut.length; i++) {
       const x = PAD + (i / (lut.length - 1)) * SIZE;
@@ -96,7 +105,7 @@ export function CurvesDialog({
       d += `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
     }
     return d;
-  }, [points]);
+  }, [points, curves, channel]);
 
   /**
    * 背景のヒストグラム。合成（3ch の最大）をグレーで敷き、その上に R/G/B を
@@ -129,6 +138,14 @@ export function CurvesDialog({
       ],
     };
   }, [histogram]);
+
+  const amount = amountOf(curves, channel);
+  const setAmount = (v: number) => {
+    onChange({
+      ...curves,
+      amounts: { ...(curves.amounts ?? FULL_AMOUNTS), [channel]: v },
+    });
+  };
 
   const setPoints = useCallback(
     (next: CurvePoint[]) => {
@@ -357,6 +374,24 @@ export function CurvesDialog({
             double-click a point to remove it.
           </p>
 
+          {/* 効き具合（チャンネルごと）。0 で素通し、100 で設定したカーブそのまま。 */}
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Amount</span>
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {Math.round(amount * 100)}%
+              </span>
+            </div>
+            <Slider
+              aria-label="Curve amount"
+              value={[amount]}
+              onValueChange={([v]) => setAmount(v)}
+              min={0}
+              max={1}
+              step={0.05}
+            />
+          </div>
+
           {/* プリセット */}
           <div className="mt-3 flex flex-wrap gap-1.5">
             {PRESETS.map((preset) => (
@@ -379,6 +414,7 @@ export function CurvesDialog({
                 r: IDENTITY_POINTS,
                 g: IDENTITY_POINTS,
                 b: IDENTITY_POINTS,
+                amounts: FULL_AMOUNTS,
               })
             }
             className="text-xs text-muted-foreground transition-colors hover:text-foreground"
