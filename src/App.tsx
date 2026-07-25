@@ -118,6 +118,22 @@ const BASE_WIDTH = 600;
  */
 const GLASS_SURFACE = "border bg-background/70 backdrop-blur-md";
 
+/** モバイルのコントロールパネル（ボトムシート）の高さ範囲(vh) */
+const PANEL_MIN_VH = 22;
+/**
+ * パネルの高さ上限は画面の 2/3。残り 1/3 にはプレビューに加えて、パネルの上に
+ * 積まれるダウンロード操作と、画面上端に固定されたズーム表示が入る。
+ */
+const PANEL_MAX_VH = 66;
+/**
+ * パネルの高さに使えない領域(px)。実測値の内訳は
+ * ズーム表示（上端 12 + 高さ 42）＋間隔 8 ＋ダウンロード操作（高さ 50）＋
+ * パネルとの間隔 20 ＝ 132（パネル上端の下限）に、パネル下端の余白 8 を足したもの。
+ * 画面が低い端末（横向き等）では 2/3 でもこれを下回って操作同士が重なるため、
+ * この値から求めた上限でさらに抑える。
+ */
+const PANEL_TOP_RESERVE_PX = 140;
+
 /**
  * Canvas を PNG として保存する。
  *
@@ -580,19 +596,46 @@ function App() {
   panzoomResetRef.current = panzoom.reset;
 
   // モバイル: コントロールパネルの高さ(vh)。上端のハンドルをドラッグで伸縮できる。
-  const PANEL_MIN_VH = 22;
-  const PANEL_MAX_VH = 88;
+  // 上限は画面の 2/3。パネルの上にはダウンロード操作が積まれて一緒にせり上がり、
+  // 画面上端にはズーム表示が固定されているので、これ以上伸ばすとプレビューが潰れ、
+  // さらに伸ばすと上端の操作と重なってレイアウトが崩れる。
   const [panelVh, setPanelVh] = useState(42);
+  const [viewportH, setViewportH] = useState(() =>
+    typeof window === "undefined" ? 0 : window.innerHeight
+  );
+  useEffect(() => {
+    const onResize = () => setViewportH(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+    };
+  }, []);
+  // 画面が低い端末（横向き等）では 2/3 でも上の操作と重なるため、必要な確保量
+  // （{@link PANEL_TOP_RESERVE_PX}）からの上限でさらに抑える。
+  const maxPanelVh =
+    viewportH > 0
+      ? Math.max(
+          PANEL_MIN_VH,
+          Math.min(
+            PANEL_MAX_VH,
+            ((viewportH - PANEL_TOP_RESERVE_PX) / viewportH) * 100
+          )
+        )
+      : PANEL_MAX_VH;
+  // 回転などで上限が下がったときは、描画時に丸めて崩れないようにする
+  const panelHeightVh = Math.min(panelVh, maxPanelVh);
   const panelDragRef = useRef<{ y: number; vh: number } | null>(null);
   const onPanelHandleDown = (e: React.PointerEvent) => {
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    panelDragRef.current = { y: e.clientY, vh: panelVh };
+    panelDragRef.current = { y: e.clientY, vh: panelHeightVh };
   };
   const onPanelHandleMove = (e: React.PointerEvent) => {
     const d = panelDragRef.current;
     if (!d) return;
     const dvh = -((e.clientY - d.y) / window.innerHeight) * 100;
-    setPanelVh(Math.max(PANEL_MIN_VH, Math.min(PANEL_MAX_VH, d.vh + dvh)));
+    setPanelVh(Math.max(PANEL_MIN_VH, Math.min(maxPanelVh, d.vh + dvh)));
   };
   const onPanelHandleUp = (e: React.PointerEvent) => {
     (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
@@ -1085,7 +1128,7 @@ function App() {
                 : "grab"
               : "default",
           // モバイルは下パネルの高さぶんだけ下パディングを空け、印刷物を非パネル領域に収める
-          paddingBottom: isLgLayout ? undefined : `calc(${panelVh}vh + 1rem)`,
+          paddingBottom: isLgLayout ? undefined : `calc(${panelHeightVh}vh + 1rem)`,
         }}
         {...panzoom.handlers}
       >
@@ -1134,7 +1177,7 @@ function App() {
         {/* Control panel: ガラス面（半透明+blur, ライト/ダーク両対応）＋内側スクロール */}
         <div
           className={`pointer-events-auto m-2 flex flex-col overflow-hidden rounded-2xl shadow-xl ${GLASS_SURFACE} lg:m-3 lg:h-[calc(100%-1.5rem)] lg:w-[340px] lg:shrink-0`}
-          style={isLgLayout ? undefined : { height: `${panelVh}vh` }}
+          style={isLgLayout ? undefined : { height: `${panelHeightVh}vh` }}
         >
           {/* Drag handle: ボトムシートの高さをドラッグで伸縮（モバイルのみ） */}
           <div
