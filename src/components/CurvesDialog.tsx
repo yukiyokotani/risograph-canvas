@@ -47,7 +47,9 @@ const PRESETS: { label: string; points: CurvePoint[] }[] = [
   },
 ];
 
-const SIZE = 260; // グラフの一辺 (px)
+const SIZE = 260; // グラフ領域の一辺（SVG 単位）
+const PAD = 10; // 余白。端の点（x=0, x=1）が枠で切れないように内側へ寄せる
+const VIEW = SIZE + PAD * 2;
 const HIT = 12; // 点をつかめる距離 (px)
 
 export interface CurvesDialogProps {
@@ -72,15 +74,18 @@ export function CurvesDialog({
 
   const points = curves[channel];
 
-  /** グラフ座標 (0–1) → SVG 座標。y は上下反転（下が 0）。 */
-  const toSvg = (p: CurvePoint) => ({ x: p.x * SIZE, y: (1 - p.y) * SIZE });
+  /** グラフ座標 (0–1) → SVG 座標。y は上下反転（下が 0）。余白 PAD の分だけ内側。 */
+  const toSvg = (p: CurvePoint) => ({
+    x: PAD + p.x * SIZE,
+    y: PAD + (1 - p.y) * SIZE,
+  });
 
   const curvePath = useMemo(() => {
     const lut = buildCurveLut(points, 128);
     let d = "";
     for (let i = 0; i < lut.length; i++) {
-      const x = (i / (lut.length - 1)) * SIZE;
-      const y = (1 - lut[i]) * SIZE;
+      const x = PAD + (i / (lut.length - 1)) * SIZE;
+      const y = PAD + (1 - lut[i]) * SIZE;
       d += `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
     }
     return d;
@@ -103,13 +108,13 @@ export function CurvesDialog({
         ? src[i]
         : (histogram.r[i] + histogram.g[i] + histogram.b[i]) / 3;
     }
-    let d = `M0,${SIZE}`;
+    let d = `M${PAD},${PAD + SIZE}`;
     for (let i = 0; i < 256; i++) {
-      const x = (i / 255) * SIZE;
-      const y = SIZE - Math.min(1, bins[i]) * SIZE * 0.9;
+      const x = PAD + (i / 255) * SIZE;
+      const y = PAD + SIZE - Math.min(1, bins[i]) * SIZE * 0.9;
       d += `L${x.toFixed(2)},${y.toFixed(2)}`;
     }
-    d += `L${SIZE},${SIZE}Z`;
+    d += `L${PAD + SIZE},${PAD + SIZE}Z`;
     return d;
   }, [histogram, channel]);
 
@@ -122,22 +127,26 @@ export function CurvesDialog({
 
   const eventToGraph = (e: { clientX: number; clientY: number }): CurvePoint => {
     const rect = svgRef.current!.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = 1 - (e.clientY - rect.top) / rect.height;
+    // 表示サイズ → SVG 単位 → 余白を除いたグラフ座標
+    const sx = ((e.clientX - rect.left) / rect.width) * VIEW - PAD;
+    const sy = ((e.clientY - rect.top) / rect.height) * VIEW - PAD;
+    const x = sx / SIZE;
+    const y = 1 - sy / SIZE;
     return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
   };
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     const g = eventToGraph(e);
     const rect = svgRef.current!.getBoundingClientRect();
-    const scale = rect.width / SIZE;
+    const scale = rect.width / VIEW;
     // 近くの点をつかむ。無ければ新しく足す。
     let hit = -1;
     let best = HIT * HIT;
     points.forEach((p, i) => {
       const s = toSvg(p);
-      const dx = (s.x - g.x * SIZE) * scale;
-      const dy = (s.y - (1 - g.y) * SIZE) * scale;
+      const gs = toSvg(g);
+      const dx = (s.x - gs.x) * scale;
+      const dy = (s.y - gs.y) * scale;
       const d2 = dx * dx + dy * dy;
       if (d2 < best) {
         best = d2;
@@ -226,7 +235,7 @@ export function CurvesDialog({
           {/* グラフ */}
           <svg
             ref={svgRef}
-            viewBox={`0 0 ${SIZE} ${SIZE}`}
+            viewBox={`0 0 ${VIEW} ${VIEW}`}
             className="w-full touch-none rounded-md border bg-card"
             style={{ aspectRatio: "1 / 1", color: "var(--foreground)" }}
             onPointerDown={onPointerDown}
@@ -237,22 +246,56 @@ export function CurvesDialog({
             {histPath && (
               <path d={histPath} fill="currentColor" opacity={0.12} />
             )}
-            {[0.25, 0.5, 0.75].map((t) => (
-              <g key={t} stroke="currentColor" opacity={0.15} strokeWidth={1}>
-                <line x1={t * SIZE} y1={0} x2={t * SIZE} y2={SIZE} />
-                <line x1={0} y1={t * SIZE} x2={SIZE} y2={t * SIZE} />
-              </g>
-            ))}
+            {/* 罫線は拡大しても 1px のままにする（太さがばらついて見えるのを防ぐ） */}
+            <g
+              stroke="currentColor"
+              strokeWidth={1}
+              vectorEffect="non-scaling-stroke"
+              shapeRendering="crispEdges"
+            >
+              <rect
+                x={PAD}
+                y={PAD}
+                width={SIZE}
+                height={SIZE}
+                fill="none"
+                opacity={0.25}
+              />
+              {[0.25, 0.5, 0.75].map((t) => (
+                <g key={t} opacity={0.12}>
+                  <line
+                    x1={PAD + t * SIZE}
+                    y1={PAD}
+                    x2={PAD + t * SIZE}
+                    y2={PAD + SIZE}
+                  />
+                  <line
+                    x1={PAD}
+                    y1={PAD + t * SIZE}
+                    x2={PAD + SIZE}
+                    y2={PAD + t * SIZE}
+                  />
+                </g>
+              ))}
+            </g>
             <line
-              x1={0}
-              y1={SIZE}
-              x2={SIZE}
-              y2={0}
+              x1={PAD}
+              y1={PAD + SIZE}
+              x2={PAD + SIZE}
+              y2={PAD}
               stroke="currentColor"
               opacity={0.25}
+              strokeWidth={1}
+              vectorEffect="non-scaling-stroke"
               strokeDasharray="4 4"
             />
-            <path d={curvePath} fill="none" stroke={activeStroke} strokeWidth={2} />
+            <path
+              d={curvePath}
+              fill="none"
+              stroke={activeStroke}
+              strokeWidth={2}
+              vectorEffect="non-scaling-stroke"
+            />
             {points.map((p, i) => {
               const s = toSvg(p);
               return (
