@@ -2,6 +2,7 @@ import {
   useRef,
   useEffect,
   useState,
+  useMemo,
   useImperativeHandle,
   forwardRef,
 } from "react";
@@ -13,6 +14,7 @@ import {
   type PaperTexture,
 } from "../lib/stencil";
 import { renderStencilPixels, getGpuDevice } from "../lib/stencilRenderer";
+import { addImageMargin } from "../lib/imageMargin";
 
 export type { StencilColor, HalftoneMode, PaperTexture };
 
@@ -38,6 +40,10 @@ export interface StencilCanvasProps {
   highlightCutoff?: number;
   paperTexture?: PaperTexture;
   paperTextureAmount?: number;
+  /** 写真の短辺に対する四辺の用紙余白（0–0.5） */
+  paperMargin?: number;
+  /** 用紙の固定縦横比。省略時は写真の形状を基準にする。 */
+  paperAspect?: number;
   noise?: number;
   transparentBg?: boolean;
   /** トーンカーブ LUT（256×3）。色分解の手前で入力画像へ適用する。 */
@@ -82,6 +88,8 @@ export const StencilCanvas = forwardRef<
     highlightCutoff = 0,
     paperTexture = "felt",
     paperTextureAmount = 0.5,
+    paperMargin = 0,
+    paperAspect,
     noise = 0,
     transparentBg = false,
     toneLut,
@@ -109,7 +117,12 @@ export const StencilCanvas = forwardRef<
   // 画像ロード: loaded.src と現在の src を比較して loading を派生
   const [loaded, setLoaded] = useState<{ src: string; data: ImageData } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const imageData = loaded && loaded.src === src ? loaded.data : null;
+  const imageData = useMemo(
+    () => loaded && loaded.src === src
+      ? addImageMargin(loaded.data, paperMargin, paperAspect)
+      : null,
+    [loaded, src, paperMargin, paperAspect],
+  );
   const loading = !imageData && !error;
 
   // src が変わったら前のエラーを捨てる。残したままだと loading の判定
@@ -160,7 +173,7 @@ export const StencilCanvas = forwardRef<
   // 処理パラメータのキーを生成し、完了キーと比較して processing を派生
   const paramsKey = [
     dotSize, density, inkOpacity, halftoneMode, separation, blackGeneration, highlightCutoff, paperTexture, paperTextureAmount, noise, misregistration,
-    transparentBg, paperColor, grain, renderScale, toneLut,
+    transparentBg, paperColor, paperMargin, paperAspect, grain, renderScale, toneLut,
     colors.map((c) => c.color).join(","),
   ].join("|");
   const [processedKey, setProcessedKey] = useState("");

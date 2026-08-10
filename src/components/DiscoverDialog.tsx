@@ -16,6 +16,9 @@ import {
   generateCandidates,
   mutate,
   scoreRender,
+  renderFingerprint,
+  fingerprintDistance,
+  renderQualityScore,
   candidateSignature,
   candidateFromSettings,
   paletteKey,
@@ -27,6 +30,8 @@ import {
   MIN_VARIATION,
   MAX_PER_PALETTE,
   type Candidate,
+  type RenderFingerprint,
+  type RenderScore,
   type SourceStats,
 } from "../lib/discover";
 
@@ -47,10 +52,115 @@ const PAGE = 48; // 1 回の補充で生成する候補数（この中から重�
 const MAX_ITEMS = 240; // 実質的なバリエーションは有限なので、この辺りで打ち切る
 const OVERSCAN_ROWS = 2;
 const CACHE_CAP = 200; // 描画済みサムネの LRU 上限（表示範囲外は解放）
-const SIMILAR_COUNT = 12;
+/** baseを含むSimilar欄の最大表示数。品質を落としてこの数まで埋めることはしない。 */
+const SIMILAR_MAX_COUNT = 8;
+/** 厳格な基準を通る候補だけを探すための近傍候補上限。 */
+const SIMILAR_POOL_SIZE = 96;
+/** 必要数の数倍が通った時点で下見を止め、全候補を無駄に描かない。 */
+const SIMILAR_SCREEN_RESERVE = 3;
+const PERCEPTUAL_DUPLICATE_DE = 5;
+const SIMILAR_DUPLICATE_DE = 2.5;
+const NOVELTY_FULL_SCORE_DE = 24;
+const QUALITY_WEIGHT = 0.68;
 
 /** 描画済みタイル（params + 描画ピクセル）。ピクセルは LRU キャッシュ / strip のみが保持する。 */
 type Rendered = Candidate & { pixels: Uint8ClampedArray; w: number; h: number };
+type Screened = {
+  cand: Candidate;
+  score: RenderScore;
+  fingerprint: RenderFingerprint;
+};
+
+/** GPUの色分解キャッシュを共有できる候補を隣接させるためのキー。 */
+function decompositionGroupKey(cand: Candidate): string {
+  return JSON.stringify([
+    cand.colors.map((color) => `${color.color}:${color.angle ?? ""}`),
+    cand.separation,
+    cand.blackGeneration ?? DISCOVER_FIXED.blackGeneration,
+    cand.highlightCutoff,
+    cand.inkOpacity,
+    cand.paperColor,
+    cand.curves ?? (cand.invert ? "invert" : null),
+  ]);
+}
+
+/** Similar用。パレット上限は設けず、品質とbase/他候補からの知覚距離で順位付けする。 */
+function selectSimilarDiverse(
+  staged: Screened[],
+  initialFingerprints: readonly RenderFingerprint[],
+  limit: number,
+  duplicateThreshold = SIMILAR_DUPLICATE_DE,
+): Screened[] {
+  const pool = [...staged];
+  const selected: Screened[] = [];
+  const fingerprints = [...initialFingerprints];
+  while (pool.length && selected.length < limit) {
+    let bestIndex = -1;
+    let bestScore = -Infinity;
+    for (let i = 0; i < pool.length; i++) {
+      const item = pool[i];
+      const nearest = Math.min(
+        ...fingerprints.map((fp) => fingerprintDistance(item.fingerprint, fp)),
+      );
+      if (nearest < duplicateThreshold) continue;
+      const novelty = Math.min(1, nearest / NOVELTY_FULL_SCORE_DE);
+      const mmr = renderQualityScore(item.score) * QUALITY_WEIGHT + novelty * (1 - QUALITY_WEIGHT);
+      if (mmr > bestScore) {
+        bestScore = mmr;
+        bestIndex = i;
+      }
+    }
+    if (bestIndex < 0) break;
+    const [chosen] = pool.splice(bestIndex, 1);
+    selected.push(chosen);
+    fingerprints.push(chosen.fingerprint);
+  }
+  return selected;
+}
+
+/**
+ * 下見レンダ済みの候補から、品質と既採用タイルからの距離を両立する順に選ぶ。
+ * ここで返した一団だけをUI末尾へappendし、表示済みタイルは触らない。
+ */
+function selectDiverse(
+  staged: Screened[],
+  acceptedFingerprints: readonly RenderFingerprint[],
+  acceptedPaletteCounts: ReadonlyMap<string, number>,
+  limit: number,
+): Screened[] {
+  const pool = [...staged];
+  const selected: Screened[] = [];
+  const selectedFingerprints: RenderFingerprint[] = [];
+  const paletteCounts = new Map(acceptedPaletteCounts);
+
+  while (pool.length && selected.length < limit) {
+    let bestIndex = -1;
+    let bestScore = -Infinity;
+    for (let i = 0; i < pool.length; i++) {
+      const item = pool[i];
+      const palette = paletteKey(item.cand);
+      if ((paletteCounts.get(palette) ?? 0) >= MAX_PER_PALETTE) continue;
+      const comparisons = [...acceptedFingerprints, ...selectedFingerprints];
+      const nearest = comparisons.length
+        ? Math.min(...comparisons.map((fp) => fingerprintDistance(item.fingerprint, fp)))
+        : NOVELTY_FULL_SCORE_DE;
+      if (nearest < PERCEPTUAL_DUPLICATE_DE) continue;
+      const novelty = Math.min(1, nearest / NOVELTY_FULL_SCORE_DE);
+      const mmr = renderQualityScore(item.score) * QUALITY_WEIGHT + novelty * (1 - QUALITY_WEIGHT);
+      if (mmr > bestScore) {
+        bestScore = mmr;
+        bestIndex = i;
+      }
+    }
+    if (bestIndex < 0) break;
+    const [chosen] = pool.splice(bestIndex, 1);
+    selected.push(chosen);
+    selectedFingerprints.push(chosen.fingerprint);
+    const palette = paletteKey(chosen.cand);
+    paletteCounts.set(palette, (paletteCounts.get(palette) ?? 0) + 1);
+  }
+  return selected;
+}
 
 export interface DiscoverDialogProps {
   open: boolean;
@@ -157,6 +267,8 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, current, onApply 
   // 補充の重複排除: 見た目が実質同じ署名と、パレットごとの採用数
   const seenSigRef = useRef<Set<string>>(new Set());
   const paletteCountRef = useRef<Map<string, number>>(new Map());
+  // UIへappend済み候補の下見レンダ特徴量。表示後に候補を消さず、次の補充だけに使う。
+  const acceptedFingerprintsRef = useRef<RenderFingerprint[]>([]);
   // 補充中の世代（-1 = 実行なし）。世代ごとに二重起動を防ぐ。
   const producingRef = useRef(-1);
   const candCountRef = useRef(0);
@@ -248,13 +360,12 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, current, onApply 
           const used = paletteCountRef.current.get(pal) ?? 0;
           if (used >= MAX_PER_PALETTE) continue; // 同じ配色で埋め尽くさない
           seenSigRef.current.add(sig);
-          paletteCountRef.current.set(pal, used + 1);
           fresh.push(cand);
         }
-        const keep: Candidate[] = [];
+        // ここはUIへ出す前のステージ。全候補を小さくレンダし、品質と見た目の特徴量を取る。
+        const staged: Screened[] = [];
         for (const cand of fresh) {
           if (myRun !== runRef.current) return;
-          if (candCountRef.current + keep.length >= MAX_ITEMS) break;
           let pixels: Uint8ClampedArray;
           try {
             pixels = await renderStencilPixels(screenSrc, buildOptions(cand, screenSrc.width));
@@ -264,12 +375,37 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, current, onApply 
           if (myRun !== runRef.current) return;
           const s = scoreRender(screenSrc.data, pixels, screenSrc.width, screenSrc.height);
           if (s.distinction < MIN_DISTINCTION || s.variation < MIN_VARIATION) continue;
-          keep.push(cand);
+          staged.push({
+            cand,
+            score: s,
+            fingerprint: renderFingerprint(pixels, screenSrc.width, screenSrc.height),
+          });
         }
-        if (keep.length) {
-          added += keep.length;
-          candCountRef.current += keep.length;
-          setCandidates((prev) => [...prev, ...keep]);
+        const remaining = Math.min(
+          want - added,
+          MAX_ITEMS - candCountRef.current,
+        );
+        const chosen = selectDiverse(
+          staged,
+          acceptedFingerprintsRef.current,
+          paletteCountRef.current,
+          remaining,
+        );
+        if (chosen.length) {
+          // 採用が確定してからパレット上限へ計上する。足切りされた組み合わせは枠を消費しない。
+          for (const item of chosen) {
+            const palette = paletteKey(item.cand);
+            paletteCountRef.current.set(
+              palette,
+              (paletteCountRef.current.get(palette) ?? 0) + 1,
+            );
+            acceptedFingerprintsRef.current.push(item.fingerprint);
+          }
+          const append = chosen.map((item) => item.cand);
+          added += append.length;
+          candCountRef.current += append.length;
+          // append-only: 既に見えているタイルは削除・並べ替えせず、末尾だけを伸ばす。
+          setCandidates((prev) => [...prev, ...append]);
         }
       }
     } finally {
@@ -351,6 +487,7 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, current, onApply 
       visRunRef.current++;
       simRunRef.current++;
       cacheRef.current.clear();
+      acceptedFingerprintsRef.current = [];
       candCountRef.current = 0;
       // 実行中の補充を止めるだけでなく、ソースも捨てる（開き直したときに前回の
       // 画像で描いた候補が一瞬見えるのを防ぐ）。
@@ -377,12 +514,14 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, current, onApply 
         const sw = SCREEN_RENDER_WIDTH;
         const sh = Math.max(1, Math.round((img.naturalHeight / img.naturalWidth) * sw));
         const sid = getImageData(img, sw, sh);
-        screenSrcRef.current = { data: sid.data, width: sw, height: sh };
+        const screenSource: ImageDataLike = { data: sid.data, width: sw, height: sh };
+        screenSrcRef.current = screenSource;
         cacheRef.current.clear();
         runRef.current++;
         pageRef.current = 0;
         seenSigRef.current = new Set();
         paletteCountRef.current = new Map();
+        acceptedFingerprintsRef.current = [];
         candCountRef.current = 0;
         setSimilar([]);
         setScrollTop(0);
@@ -396,7 +535,26 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, current, onApply 
         setSelectedId(cur.id);
         setSimilarSelectedId(cur.id);
         selectMain(cur);
-        produce(PAGE);
+        // Current も知覚重複の基準へ入れてから候補を補充する。下見は小さいので安価。
+        const myRun = runRef.current;
+        renderStencilPixels(
+          screenSource,
+          buildOptions(cur, screenSource.width),
+        )
+          .then((pixels) => {
+            if (!alive || myRun !== runRef.current) return;
+            acceptedFingerprintsRef.current = [
+              renderFingerprint(
+                pixels,
+                screenSource.width,
+                screenSource.height,
+              ),
+            ];
+            produce(PAGE);
+          })
+          .catch(() => {
+            if (alive && myRun === runRef.current) produce(PAGE);
+          });
       })
       .catch(() => {});
     return () => {
@@ -433,33 +591,105 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, current, onApply 
       setSelectedId(cand.id);
       setSimilarSelectedId(cand.id);
       const src = sourceRef.current;
-      if (!src) return;
+      const screenSrc = screenSrcRef.current;
+      if (!src || !screenSrc) return;
       const myRun = ++simRunRef.current;
+      // 前の候補を残すと、生成中に別候補のSimilarをクリックできてしまう。
+      // 先に固定数プレースホルダーへ切り替え、選択との対応を常に明確にする。
+      setSimilar([]);
       setSimilarLoading(true);
-      const baseR = cacheRef.current.get(cand.id) ?? (await renderCand(src, cand));
-      if (myRun !== simRunRef.current) return;
-      const strip: Rendered[] = baseR ? [baseR] : [];
-      setSimilar([...strip]);
-      // 近傍は多めに作り、潰れたものと重複を落としながら SIMILAR_COUNT 枚まで並べる。
-      const seen = new Set<string>([candidateSignature(cand)]);
-      const variations = mutate(cand, simSeedRef.current++, SIMILAR_COUNT * 2);
-      for (const v of variations) {
-        if (strip.length > SIMILAR_COUNT) break;
-        const sig = candidateSignature(v);
-        if (seen.has(sig)) continue;
-        seen.add(sig);
+      try {
+        const baseR = cacheRef.current.get(cand.id) ?? (await renderCand(src, cand));
         if (myRun !== simRunRef.current) return;
-        const r = await queueRender(v, () => myRun === simRunRef.current);
-        if (myRun !== simRunRef.current) return;
-        if (!r) continue;
-        // 表示用に描いたサムネをそのまま採点し、ディテールが潰れたものは並べない
-        const s = scoreRender(src.data, r.pixels, src.width, src.height);
-        if (s.distinction < MIN_DISTINCTION || s.variation < MIN_VARIATION) continue;
-        strip.push(r);
+        const strip: Rendered[] = baseR ? [baseR] : [];
         setSimilar([...strip]);
+        if (!baseR) return;
+
+        // まず88pxの下見だけを作る。本描画より約7.4倍少ない画素数で足切りできる。
+        const baseScreenPixels = await renderStencilPixels(
+          screenSrc,
+          buildOptions(cand, screenSrc.width),
+        );
+        if (myRun !== simRunRef.current) return;
+        const baseFingerprint = renderFingerprint(
+          baseScreenPixels,
+          screenSrc.width,
+          screenSrc.height,
+        );
+        const needed = Math.max(0, SIMILAR_MAX_COUNT - strip.length);
+        if (!needed) return;
+
+        const seen = new Set<string>([candidateSignature(cand)]);
+        const variations = mutate(cand, simSeedRef.current++, SIMILAR_POOL_SIZE)
+          .filter((variation) => {
+            const signature = candidateSignature(variation);
+            if (seen.has(signature)) return false;
+            seen.add(signature);
+            return true;
+          })
+          // 同じ色分解条件を連続処理し、1エントリのGPU濃度キャッシュを使い回す。
+          .sort((a, b) => decompositionGroupKey(a).localeCompare(decompositionGroupKey(b)));
+
+        const strict: Screened[] = [];
+        for (const variation of variations) {
+          if (myRun !== simRunRef.current) return;
+          let pixels: Uint8ClampedArray;
+          try {
+            pixels = await renderStencilPixels(
+              screenSrc,
+              buildOptions(variation, screenSrc.width),
+            );
+          } catch {
+            continue;
+          }
+          if (myRun !== simRunRef.current) return;
+          const score = scoreRender(
+            screenSrc.data,
+            pixels,
+            screenSrc.width,
+            screenSrc.height,
+          );
+          const screened = {
+            cand: variation,
+            score,
+            fingerprint: renderFingerprint(pixels, screenSrc.width, screenSrc.height),
+          };
+          if (score.distinction >= MIN_DISTINCTION && score.variation >= MIN_VARIATION) {
+            strict.push(screened);
+          }
+
+          if (strict.length >= needed * SIMILAR_SCREEN_RESERVE) {
+            const enough = selectSimilarDiverse(
+              strict,
+              [baseFingerprint],
+              needed,
+            );
+            if (enough.length >= needed) break;
+          }
+        }
+
+        const ranked = selectSimilarDiverse(
+          strict,
+          [baseFingerprint],
+          needed + 3,
+        );
+
+        // 240pxの本描画は厳格な基準を通った候補だけ。足りなくても品質を緩めない。
+        for (const item of ranked) {
+          if (strip.length >= SIMILAR_MAX_COUNT) break;
+          if (myRun !== simRunRef.current) return;
+          const rendered = await queueRender(
+            item.cand,
+            () => myRun === simRunRef.current,
+          );
+          if (myRun !== simRunRef.current) return;
+          if (rendered) strip.push(rendered);
+        }
+        if (myRun !== simRunRef.current) return;
+        setSimilar([...strip]);
+      } finally {
+        if (myRun === simRunRef.current) setSimilarLoading(false);
       }
-      if (myRun !== simRunRef.current) return;
-      setSimilarLoading(false);
     },
     [queueRender],
   );
@@ -543,14 +773,19 @@ export function DiscoverDialog({ open, onOpenChange, imageSrc, current, onApply 
                   </button>
                 );
               })}
-              {similarLoading && (
-                <div
-                  style={{ width: stripTile, height: stripTile }}
-                  className="flex shrink-0 items-center justify-center text-muted-foreground"
-                >
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                </div>
-              )}
+              {similarLoading &&
+                Array.from(
+                  { length: Math.max(0, SIMILAR_MAX_COUNT - similar.length) },
+                  (_, index) => (
+                    <div
+                      key={`similar-placeholder-${selectedId}-${index}`}
+                      style={{ width: stripTile, height: stripTile }}
+                      className="flex shrink-0 animate-pulse items-center justify-center bg-muted text-muted-foreground"
+                    >
+                      {index === 0 && <Loader2 className="h-4 w-4 animate-spin" />}
+                    </div>
+                  ),
+                )}
             </div>
           </div>
         )}

@@ -39,7 +39,7 @@ const DiscoverDialog = lazy(() =>
 import { DISCOVER_FIXED, type Candidate } from "./lib/discover";
 import { usePanZoom } from "./hooks/usePanZoom";
 import { useSettingsHistory } from "./hooks/useSettingsHistory";
-import type { StencilSettings } from "./lib/settings";
+import type { PaperShape, StencilSettings } from "./lib/settings";
 import { CurvesDialog, CurvesIcon } from "./components/CurvesDialog";
 import {
   buildToneLut,
@@ -49,6 +49,7 @@ import {
   type ToneCurves,
 } from "./lib/curve";
 import { useVisualHistory } from "./hooks/useVisualHistory";
+import { addImageMargin, imageSizeWithMargin } from "./lib/imageMargin";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -193,6 +194,60 @@ const PAPER_COLORS = [
   { name: "Black", color: "#1a1a1a" },
 ];
 
+const PAPER_SHAPES: ReadonlyArray<{
+  value: PaperShape;
+  label: string;
+  aspect?: number;
+}> = [
+  { value: "original", label: "Original (Photo)" },
+  { value: "square", label: "Square · 1:1", aspect: 1 },
+  { value: "portrait-a", label: "A Paper · Portrait", aspect: 1 / Math.SQRT2 },
+  { value: "portrait-2x3", label: "Portrait · 2:3", aspect: 2 / 3 },
+  { value: "portrait-3x4", label: "Portrait · 3:4", aspect: 3 / 4 },
+  { value: "portrait-4x5", label: "Portrait · 4:5", aspect: 4 / 5 },
+  { value: "landscape-a", label: "A Paper · Landscape", aspect: Math.SQRT2 },
+  { value: "landscape-3x2", label: "Landscape · 3:2", aspect: 3 / 2 },
+  { value: "landscape-4x3", label: "Landscape · 4:3", aspect: 4 / 3 },
+  { value: "landscape-5x4", label: "Landscape · 5:4", aspect: 5 / 4 },
+  { value: "widescreen", label: "Widescreen · 16:9", aspect: 16 / 9 },
+];
+
+function aspectForPaperShape(shape: PaperShape): number | undefined {
+  return PAPER_SHAPES.find((option) => option.value === shape)?.aspect;
+}
+
+function PaperShapeIcon({ aspect }: { aspect: number }) {
+  const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
+  const maxWidth = 18;
+  const maxHeight = 14;
+  const width = safeAspect >= maxWidth / maxHeight
+    ? maxWidth
+    : maxHeight * safeAspect;
+  const height = safeAspect >= maxWidth / maxHeight
+    ? maxWidth / safeAspect
+    : maxHeight;
+
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 18"
+      className="size-auto h-4 w-6 shrink-0"
+    >
+      <rect
+        x={(24 - width) / 2}
+        y={(18 - height) / 2}
+        width={width}
+        height={height}
+        rx={0.75}
+        fill="currentColor"
+        fillOpacity={0.08}
+        stroke="currentColor"
+        strokeWidth={1.4}
+      />
+    </svg>
+  );
+}
+
 const guide = {
   en: {
     title: "Guide",
@@ -203,7 +258,7 @@ const guide = {
       },
       {
         heading: "Paper",
-        body: "Set the paper color to simulate different stocks. Texture adds a paper surface — Felt or Fiber — with adjustable strength. Enable Transparent to drop the paper entirely: only the ink remains, exported over a transparent background.",
+        body: "Set the paper color and choose a preset paper shape. Original (Photo) keeps the source image's dimensions; the other presets add paper around the uncropped, centered photo. Photo margin sets the minimum even border, measured against the photo's shorter edge. Texture adds a paper surface — Felt or Fiber — with adjustable strength. Enable Transparent to drop the paper entirely: only the ink remains, exported over a transparent background.",
       },
       {
         heading: "Ink Colors",
@@ -268,7 +323,7 @@ const guide = {
       },
       {
         heading: "用紙 (Paper)",
-        body: "用紙色を選んで紙質をシミュレートします。Texture は紙の地合い（Felt / Fiber）を強さ付きで加えます。「Transparent」を有効にすると用紙を無くし、インクだけを透明背景の上に書き出せます。",
+        body: "用紙色と縦横比プリセットを選びます。「Original (Photo)」は元写真の形状を維持し、それ以外では写真を切り抜かず中央へ配置して周囲に用紙を足します。Photo margin は写真の短辺を基準に、四辺の最小余白を設定します。Texture は紙の地合い（Felt / Fiber）を強さ付きで加えます。「Transparent」を有効にすると用紙を無くし、インクだけを透明背景の上に書き出せます。",
       },
       {
         heading: "インクカラー (Ink Colors)",
@@ -567,6 +622,8 @@ function App() {
   const [highlightCutoff, setHighlightCutoff] = useState(HALFTONE_DEFAULTS.highlightCutoff);
   const [paperTexture, setPaperTexture] = useState<PaperTexture>("none");
   const [paperTextureAmount, setPaperTextureAmount] = useState(0.5);
+  const [paperMargin, setPaperMargin] = useState(0);
+  const [paperShape, setPaperShape] = useState<PaperShape>("original");
   const [downloadScale, setDownloadScale] = useState("1");
   const [presetKey, setPresetKey] = useState("tricolor");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -709,12 +766,22 @@ function App() {
   }, []);
 
   // プレビュー領域（パネルに重ならない残り領域）いっぱいに、幅・高さ両方へフィット
+  const basePhotoHeight = imageAspect ? BASE_WIDTH / imageAspect : BASE_WIDTH;
+  const paperAspect = aspectForPaperShape(paperShape);
+  const basePaperSize = imageSizeWithMargin(
+    BASE_WIDTH,
+    basePhotoHeight,
+    paperMargin,
+    paperAspect,
+  );
+  const renderedPaperAspect = basePaperSize.width / basePaperSize.height;
+
   const canvasWidth = (() => {
     if (!imageAspect) return 600;
     const pad = isLgLayout ? 40 : 24;
     const availW = Math.max(0, containerSize.width - pad);
     const availH = Math.max(0, containerSize.height - pad);
-    const widthFromHeight = availH * imageAspect;
+    const widthFromHeight = availH * renderedPaperAspect;
     return Math.max(100, Math.min(availW, widthFromHeight));
   })();
 
@@ -739,16 +806,24 @@ function App() {
   const qualityScale = (() => {
     if (!gpuAvailable || !imageAspect) return 1;
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-    const needed = (canvasWidth * settledZoom * dpr) / BASE_WIDTH;
+    const needed = (canvasWidth * settledZoom * dpr) / basePaperSize.width;
     let q = Math.max(1, Math.min(4, Math.ceil(needed - 0.05)));
     // メモリ上限: 濃度バッファ = inkCount × pixelCount × 4byte。GPU の
     // storage buffer 上限（多くは 128MB）に余裕を持たせ 96MB までに抑える。
-    const baseH = BASE_WIDTH / imageAspect;
     const budgetBytes = 96 * 1024 * 1024;
-    while (q > 1 && BASE_WIDTH * q * baseH * q * colors.length * 4 > budgetBytes) q -= 1;
+    while (
+      q > 1 &&
+      basePaperSize.width * q * basePaperSize.height * q * colors.length * 4 > budgetBytes
+    ) q -= 1;
     return q;
   })();
   const renderWidth = Math.round(BASE_WIDTH * qualityScale);
+  const exportWidthForScale = (scale: number) => {
+    if (!imageAspect) return BASE_WIDTH * scale;
+    const photoWidth = BASE_WIDTH * scale;
+    const photoHeight = Math.round(photoWidth / imageAspect);
+    return imageSizeWithMargin(photoWidth, photoHeight, paperMargin, paperAspect).width;
+  };
 
   const handleDownload = async () => {
     const scale = Number(downloadScale);
@@ -765,7 +840,11 @@ function App() {
       const targetHeight = Math.round(
         (img.naturalHeight / img.naturalWidth) * targetWidth
       );
-      const imageData = getImageData(img, targetWidth, targetHeight);
+      const imageData = addImageMargin(
+        getImageData(img, targetWidth, targetHeight),
+        paperMargin,
+        paperAspect,
+      );
       const options: StencilOptions = {
         colors,
         dotSize,
@@ -826,10 +905,10 @@ function App() {
       }
 
       const offscreen = document.createElement("canvas");
-      offscreen.width = targetWidth;
-      offscreen.height = targetHeight;
+      offscreen.width = imageData.width;
+      offscreen.height = imageData.height;
       const ctx = offscreen.getContext("2d")!;
-      const output = ctx.createImageData(targetWidth, targetHeight);
+      const output = ctx.createImageData(imageData.width, imageData.height);
       output.data.set(pixels);
       ctx.putImageData(output, 0, 0);
 
@@ -953,6 +1032,8 @@ function App() {
     highlightCutoff,
     paperTexture,
     paperTextureAmount,
+    paperMargin,
+    paperShape,
     noise,
     transparentBg,
     curves,
@@ -989,6 +1070,8 @@ function App() {
     setHighlightCutoff(s.highlightCutoff);
     setPaperTexture(s.paperTexture);
     setPaperTextureAmount(s.paperTextureAmount);
+    setPaperMargin(s.paperMargin ?? 0);
+    setPaperShape(s.paperShape ?? "original");
     setNoise(s.noise);
     setTransparentBg(s.transparentBg);
     setCurves(s.curves ?? IDENTITY_CURVES);
@@ -1054,12 +1137,15 @@ function App() {
             y2="0"
             spreadMethod="repeat"
           >
-            {/* 青→紫→モーヴ(淡ピンク)。0% と 100% を同色にして継ぎ目なくループ（シアンなし、鮮やかめ） */}
-            <stop offset="0%" stopColor="#3568d8" />
-            <stop offset="25%" stopColor="#7d5fe8" />
-            <stop offset="50%" stopColor="#c85fda" />
-            <stop offset="75%" stopColor="#7d5fe8" />
-            <stop offset="100%" stopColor="#3568d8" />
+            {/* 青→紫→モーヴ。同程度の明度で細かく補間し、色相の飛びを抑える。 */}
+            <stop offset="0%" stopColor="#4f75e8" />
+            <stop offset="14%" stopColor="#6a70ea" />
+            <stop offset="28%" stopColor="#8a68e7" />
+            <stop offset="42%" stopColor="#aa68dc" />
+            <stop offset="56%" stopColor="#c46fc6" />
+            <stop offset="70%" stopColor="#9a6ce0" />
+            <stop offset="84%" stopColor="#716fe9" />
+            <stop offset="100%" stopColor="#4f75e8" />
             <animateTransform
               attributeName="gradientTransform"
               type="translate"
@@ -1117,6 +1203,8 @@ function App() {
               highlightCutoff={highlightCutoff}
               paperTexture={paperTexture}
               paperTextureAmount={paperTextureAmount}
+              paperMargin={paperMargin}
+              paperAspect={paperAspect}
               noise={noise}
               transparentBg={transparentBg}
               toneLut={toneLut}
@@ -1337,7 +1425,45 @@ function App() {
               </div>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3">
-              <div>
+              <div className="min-w-0">
+                <Label className="mb-2 text-xs text-muted-foreground">Shape</Label>
+                <Select
+                  value={paperShape}
+                  onValueChange={(v) => setPaperShape(v as PaperShape)}
+                >
+                  <SelectTrigger aria-label="Paper shape" className="h-9 w-full text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAPER_SHAPES.map((option) => (
+                      <SelectItem key={option.value} value={option.value} className="text-xs">
+                        <PaperShapeIcon aspect={option.aspect ?? imageAspect ?? 1} />
+                        <span>{option.label}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="min-w-0">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <Label className="text-xs text-muted-foreground">Photo margin</Label>
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    {Math.round(paperMargin * 100)}%
+                  </span>
+                </div>
+                <Slider
+                  aria-label="Photo margin"
+                  value={[paperMargin]}
+                  onValueChange={([v]) => setPaperMargin(v)}
+                  min={0}
+                  max={0.5}
+                  step={0.01}
+                  className="h-9"
+                />
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div className="min-w-0">
                 <Label className="mb-2 text-xs text-muted-foreground">Texture</Label>
                 <Select
                   value={paperTexture}
@@ -1355,10 +1481,13 @@ function App() {
                 </Select>
               </div>
               {paperTexture !== "none" && (
-                <div>
-                  <Label className="mb-2 text-xs text-muted-foreground">
-                    Texture amount
-                  </Label>
+                <div className="min-w-0">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <Label className="text-xs text-muted-foreground">Texture amount</Label>
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {Math.round(paperTextureAmount * 100)}%
+                    </span>
+                  </div>
                   <Slider
                     aria-label="Texture strength"
                     value={[paperTextureAmount]}
@@ -1366,11 +1495,8 @@ function App() {
                     min={0}
                     max={1}
                     step={0.05}
-                    className="mt-2"
+                    className="h-9"
                   />
-                  <span className="mt-1 block text-right font-mono text-[11px] text-muted-foreground">
-                    {Math.round(paperTextureAmount * 100)}%
-                  </span>
                 </div>
               )}
             </div>
@@ -1682,9 +1808,15 @@ function App() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="1" className="text-xs">1x (600px)</SelectItem>
-                <SelectItem value="2" className="text-xs">2x (1200px)</SelectItem>
-                <SelectItem value="4" className="text-xs">4x (2400px)</SelectItem>
+                <SelectItem value="1" className="text-xs">
+                  1x ({exportWidthForScale(1)}px)
+                </SelectItem>
+                <SelectItem value="2" className="text-xs">
+                  2x ({exportWidthForScale(2)}px)
+                </SelectItem>
+                <SelectItem value="4" className="text-xs">
+                  4x ({exportWidthForScale(4)}px)
+                </SelectItem>
               </SelectContent>
             </Select>
             <Button

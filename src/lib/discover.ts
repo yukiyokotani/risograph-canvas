@@ -137,6 +137,30 @@ const hueDist = (a: number, b: number) => {
   return d > 180 ? 360 - d : d;
 };
 
+/**
+ * 別版にする意味が薄いほど近いインクだけを弾く。色相差だけでは緑＋黄や緑＋青まで
+ * 落としてしまうため、明度・彩度も含む Lab 色差で判断する。
+ */
+const MIN_INK_DELTA_E = 28;
+export function hasNearDuplicateInks(
+  colors: readonly StencilColor[],
+  minDeltaE = MIN_INK_DELTA_E,
+): boolean {
+  const labs = colors.map((color) => {
+    const { r, g, b } = hexToRgb(color.color);
+    return rgbToLab(r, g, b);
+  });
+  for (let i = 0; i < labs.length; i++) {
+    for (let j = i + 1; j < labs.length; j++) {
+      const dL = labs[i][0] - labs[j][0];
+      const da = labs[i][1] - labs[j][1];
+      const db = labs[i][2] - labs[j][2];
+      if (Math.hypot(dL, da, db) < minDeltaE) return true;
+    }
+  }
+  return false;
+}
+
 // 彩度が高く色相がはっきりしたインク（デュオ/トリオの主役）
 const VIVID_KEYS: (keyof typeof INKS)[] = [
   "blue", "brightRed", "yellow", "teal", "orange", "green", "burgundy", "purple",
@@ -188,51 +212,121 @@ const CURATED: Combo[] = [...PRESET_COMBOS, ...EXTRA_COMBOS];
 export interface SourceStats {
   chroma: number; // 平均 Lab 彩度
   dominantHue: number; // 彩度で重み付けした支配色相（ヒストグラムのピーク）
+  /** 面積の大きい順に最大3つ。複数の主役色を持つ写真で配色を一色へ寄せすぎない。 */
+  dominantHues: number[];
   mono: boolean;
   /** 明るさの平均 L*。暗い写真と明るい写真で「効く濃度」が正反対なので振り方を変える。 */
   meanL: number;
   /** 明るさの標準偏差 L*。平坦な画像は忠実に分解しても灰色の塊にしかならない。 */
   stdL: number;
+  /** 外れ値に引っ張られにくい明度分位点。 */
+  l10: number;
+  l50: number;
+  l90: number;
+  /** 彩度12以上の画素が占める割合。 */
+  saturatedRatio: number;
+  /** 近接画素間の平均L*差。明度レンジが同じでも細部の多寡を区別する。 */
+  localContrast: number;
 }
 
 const HUE_BINS = 12;
 
 export function analyzeSource(px: Uint8ClampedArray, w: number, h: number): SourceStats {
-  let cSum = 0, n = 0, lSum = 0, l2Sum = 0;
+  let cSum = 0, n = 0, lSum = 0, l2Sum = 0, saturated = 0, localSum = 0, localN = 0;
   // 円環平均だと「オレンジの肌 + 青緑の背景」のような二峰の画像で色相が打ち消し合い、
   // 意味のない方向を指す。彩度加重ヒストグラムのピークを支配色相として使う。
   const bins = new Float32Array(HUE_BINS);
+  const lightness: number[] = [];
   const step = Math.max(1, Math.floor((w * h) / 4000)); // 最大 ~4000 サンプル
   for (let i = 0; i < w * h; i += step) {
     const o = i * 4;
     const [L, la, lb] = rgbToLab(px[o], px[o + 1], px[o + 2]);
     const c = Math.hypot(la, lb);
     cSum += c; lSum += L; l2Sum += L * L; n++;
+    lightness.push(L);
+    if (c >= 12) saturated++;
     const hue = ((Math.atan2(lb, la) * 180) / Math.PI + 360) % 360;
     bins[Math.floor(hue / (360 / HUE_BINS)) % HUE_BINS] += c;
+    // 右・下の近接画素との明度差。サンプル位置だけで測れば最大約8,000比較に収まる。
+    const x = i % w;
+    const y = Math.floor(i / w);
+    if (x + 1 < w) {
+      const ro = o + 4;
+      const [rightL] = rgbToLab(px[ro], px[ro + 1], px[ro + 2]);
+      localSum += Math.abs(L - rightL); localN++;
+    }
+    if (y + 1 < h) {
+      const bo = o + w * 4;
+      const [belowL] = rgbToLab(px[bo], px[bo + 1], px[bo + 2]);
+      localSum += Math.abs(L - belowL); localN++;
+    }
   }
   const chroma = n ? cSum / n : 0;
   const meanL = n ? lSum / n : 0;
   const stdL = n ? Math.sqrt(Math.max(0, l2Sum / n - meanL * meanL)) : 0;
-  // ピーク bin とその両隣で重心を取り、bin 幅（30°）より細かい角度にする
-  let peak = 0;
-  for (let i = 1; i < HUE_BINS; i++) if (bins[i] > bins[peak]) peak = i;
   const width = 360 / HUE_BINS;
-  let vx = 0, vy = 0;
-  for (let d = -1; d <= 1; d++) {
-    const i = (peak + d + HUE_BINS) % HUE_BINS;
-    const ang = ((i + 0.5) * width * Math.PI) / 180;
-    vx += bins[i] * Math.cos(ang);
-    vy += bins[i] * Math.sin(ang);
+  // 強い山から、互いに60°以上離れたピークを最大3つ取る。
+  const peakBins = Array.from({ length: HUE_BINS }, (_, i) => i)
+    .sort((a, b) => bins[b] - bins[a]);
+  const selectedBins: number[] = [];
+  for (const peak of peakBins) {
+    if (bins[peak] <= 0) break;
+    const hue = (peak + 0.5) * width;
+    if (selectedBins.some((p) => hueDist((p + 0.5) * width, hue) < 60)) continue;
+    selectedBins.push(peak);
+    if (selectedBins.length === 3) break;
   }
-  const dominantHue = (Math.atan2(vy, vx) * 180) / Math.PI;
-  return { chroma, dominantHue, mono: chroma < 12, meanL, stdL };
+  const hueForPeak = (peak: number) => {
+    let vx = 0, vy = 0;
+    for (let d = -1; d <= 1; d++) {
+      const bi = (peak + d + HUE_BINS) % HUE_BINS;
+      const ang = ((bi + 0.5) * width * Math.PI) / 180;
+      vx += bins[bi] * Math.cos(ang);
+      vy += bins[bi] * Math.sin(ang);
+    }
+    return ((Math.atan2(vy, vx) * 180) / Math.PI + 360) % 360;
+  };
+  const dominantHues = selectedBins.map(hueForPeak);
+  const dominantHue = dominantHues[0] ?? 0;
+  lightness.sort((a, b) => a - b);
+  const quantile = (q: number) => lightness.length
+    ? lightness[Math.min(lightness.length - 1, Math.floor((lightness.length - 1) * q))]
+    : 0;
+  return {
+    chroma,
+    dominantHue,
+    dominantHues,
+    mono: chroma < 12,
+    meanL,
+    stdL,
+    l10: quantile(0.1),
+    l50: quantile(0.5),
+    l90: quantile(0.9),
+    saturatedRatio: n ? saturated / n : 0,
+    localContrast: localN ? localSum / localN : 0,
+  };
 }
 
-/** 画像の性格。生成の分岐がここに集約されるようにしておく。 */
-const isLowKey = (s: SourceStats) => s.meanL < 42;
-const isHighKey = (s: SourceStats) => s.meanL > 68;
-const isFlat = (s: SourceStats) => s.stdL < 18;
+const smoothstep = (lo: number, hi: number, v: number) => {
+  const t = clamp(0, 1, (v - lo) / (hi - lo));
+  return t * t * (3 - 2 * t);
+};
+
+/** 閾値直前・直後で候補分布が急変しないよう、画像の性格を0–1の連続量で表す。 */
+function sourceProfile(s: SourceStats) {
+  const tonalRange = s.l90 - s.l10;
+  return {
+    low: 1 - smoothstep(32, 52, s.l50),
+    high: smoothstep(58, 78, s.l50),
+    flat: 1 - smoothstep(22, 44, tonalRange + s.localContrast * 1.5),
+    mono: 1 - smoothstep(8, 20, s.chroma * (0.7 + s.saturatedRatio)),
+  };
+}
+
+/** 極端なケースを完全除外するときだけ連続プロファイルを閾値化する。 */
+const isLowKey = (s: SourceStats) => sourceProfile(s).low > 0.7;
+const isHighKey = (s: SourceStats) => sourceProfile(s).high > 0.7;
+const isFlat = (s: SourceStats) => sourceProfile(s).flat > 0.7;
 
 // ---------------------------------------------------------------------------
 // インク選択（色相ハーモニー）
@@ -283,29 +377,33 @@ function pickHarmony(
   rng: () => number,
   pool: PoolInk[],
   n: number,
-  baseHue: number | null,
+  baseHues: readonly number[] | null,
 ): PoolInk[] {
   const chosen: PoolInk[] = [];
   const exclude = new Set<string>();
   // アンカー: 半分は支配色相、1/4 はその補色（被写体を補色で刷る当たり）、残りは自由
+  const sourceHue = baseHues?.length ? pick(rng, baseHues) : null;
   const anchor =
-    baseHue === null
+    sourceHue === null
       ? rng() * 360
       : rng() < 0.5
-        ? baseHue
+        ? sourceHue
         : rng() < 0.5
-          ? baseHue + 180
+          ? sourceHue + 180
           : rng() * 360;
   const scheme =
     n === 2 ? pick(rng, DUO_SCHEMES) : n === 3 ? pick(rng, TRI_SCHEMES) : null;
   for (let i = 0; i < n; i++) {
     const target = anchor + (scheme ? scheme[i] : (360 / n) * i);
-    let attempt = pickNearHue(rng, pool, target, exclude);
-    // 既選択と色相が近すぎる場合は再抽選（弾いた色は除外して同じものを引き直さない）
-    for (let t = 0; t < 5 && chosen.some((c) => hueDist(c.hue, attempt.hue) < 35); t++) {
-      exclude.add(attempt.key);
-      attempt = pickNearHue(rng, pool, target, exclude);
-    }
+    // 色相だけでなく知覚色差で絞る。Paprika + Pumpkin のような実質同色は避けるが、
+    // Green + Yellow / Green + Blue のように十分区別できる組み合わせは残す。
+    const available = pool.filter(
+      (candidate) =>
+        !exclude.has(candidate.key) &&
+        !hasNearDuplicateInks([...chosen.map((ink) => ink.color), candidate.color]),
+    );
+    if (!available.length) break;
+    const attempt = pickNearHue(rng, available, target, exclude);
     chosen.push(attempt);
     exclude.add(attempt.key);
   }
@@ -334,6 +432,17 @@ const OPACITIES = [0.65, 0.8, 0.95];
 /** リソらしい版ずれは常に少しだけ。振っても見えないので発見の軸にはしない。 */
 const MISREGISTRATION = 1;
 
+function weightedIndex(rng: () => number, weights: readonly number[]): number {
+  const total = weights.reduce((sum, weight) => sum + Math.max(0, weight), 0);
+  if (total <= 0) return 0;
+  let cursor = rng() * total;
+  for (let i = 0; i < weights.length; i++) {
+    cursor -= Math.max(0, weights[i]);
+    if (cursor <= 0) return i;
+  }
+  return weights.length - 1;
+}
+
 /**
  * 色分解の強さの抽選。写真は忠実側（0 付近）が当たりやすい一方、思い切って
  * グラフィックに倒した絵も Discover の面白さなので、忠実寄りに重みを置きつつ
@@ -341,22 +450,21 @@ const MISREGISTRATION = 1;
  * ならない（足切りでほとんど落ちる）ので、強い側へ重みを移す。
  */
 function pickSeparation(rng: () => number, stats?: SourceStats): number {
-  const r = rng();
-  if (stats && isFlat(stats)) {
-    if (r < 0.15) return 0;
-    if (r < 0.45) return roundTo(0.05, rangePick(rng, 0.2, 0.45));
-    if (r < 0.8) return roundTo(0.05, rangePick(rng, 0.5, 0.75));
-    return roundTo(0.05, rangePick(rng, 0.8, 1));
+  const normal = [0.4, 0.25, 0.2, 0.15];
+  let weights = normal;
+  if (stats) {
+    const profile = sourceProfile(stats);
+    const low = [0.58, 0.3, 0.12, 0];
+    const flat = [0.15, 0.3, 0.35, 0.2];
+    const influence = Math.min(1, profile.low + profile.flat);
+    const lowShare = influence ? profile.low / (profile.low + profile.flat) : 0;
+    const target = low.map((value, i) => value * lowShare + flat[i] * (1 - lowShare));
+    weights = normal.map((value, i) => value * (1 - influence) + target[i] * influence);
   }
-  // 暗い写真は強く分解するとインクが乗りすぎて潰れる（掃引でも高い側はほぼ通らない）
-  if (stats && isLowKey(stats)) {
-    if (r < 0.55) return 0;
-    if (r < 0.85) return roundTo(0.05, rangePick(rng, 0.15, 0.4));
-    return roundTo(0.05, rangePick(rng, 0.45, 0.7));
-  }
-  if (r < 0.4) return 0;
-  if (r < 0.65) return roundTo(0.05, rangePick(rng, 0.15, 0.4));
-  if (r < 0.85) return roundTo(0.05, rangePick(rng, 0.45, 0.7));
+  const band = weightedIndex(rng, weights);
+  if (band === 0) return 0;
+  if (band === 1) return roundTo(0.05, rangePick(rng, 0.15, 0.4));
+  if (band === 2) return roundTo(0.05, rangePick(rng, 0.45, 0.7));
   return roundTo(0.05, rangePick(rng, 0.75, 1));
 }
 
@@ -368,23 +476,29 @@ function pickSeparation(rng: () => number, stats?: SourceStats): number {
  *   明るい写真 … インク量が足りないので濃度は高め。
  */
 function randomParams(rng: () => number, stats: SourceStats) {
+  const profile = sourceProfile(stats);
   const separation = pickSeparation(rng, stats);
-  const densPool: readonly number[] = isLowKey(stats)
-    ? [0.9, 1.1]
-    : isHighKey(stats) || isFlat(stats)
-      ? [1.1, 1.3, 1.5]
-      : DENSITIES;
-  const opacPool: readonly number[] = isLowKey(stats)
-    ? [0.8, 0.95, 0.95] // 暗い写真では 0.95 の通過率が飛び抜けて高い
-    : isFlat(stats)
-      ? [0.8, 0.95]
-      : OPACITIES;
-  const density = pick(rng, densPool);
-  const inkOpacity = pick(rng, opacPool);
+  const densityWeights = DENSITIES.map((_, i) => {
+    const normal = 1;
+    const low = [2, 1.7, 0.35, 0.08][i];
+    const brightOrFlat = [0.2, 1, 1.8, 2.2][i];
+    const strong = Math.max(profile.high, profile.flat);
+    return normal * (1 - Math.max(profile.low, strong)) +
+      low * profile.low + brightOrFlat * strong;
+  });
+  const opacityWeights = OPACITIES.map((_, i) => {
+    const normal = 1;
+    const low = [0.15, 1.1, 2.4][i];
+    const flat = [0.25, 1.4, 2][i];
+    return normal * (1 - Math.max(profile.low, profile.flat)) +
+      low * profile.low + flat * profile.flat;
+  });
+  const density = DENSITIES[weightedIndex(rng, densityWeights)];
+  const inkOpacity = OPACITIES[weightedIndex(rng, opacityWeights)];
   // ハイライトのクリップ: 効いているか分かる量だけ引く（0.03 は軟らかいニーで消える）。
   // 暗い写真では明部が少なく、効かせるとますます何も出ないので使わない。
   const highlightCutoff =
-    isLowKey(stats) || rng() < 0.75 ? 0 : pick(rng, [0.08, 0.2]);
+    rng() < 0.75 + profile.low * 0.25 ? 0 : pick(rng, [0.08, 0.2]);
   // paperTexture は固定（DISCOVER_FIXED）なのでここでは振らない
   return {
     separation,
@@ -507,7 +621,8 @@ export function generateCandidates(
 ): Candidate[] {
   const rng = makeRng(seed);
   const out: Candidate[] = [];
-  const baseHue = stats.mono ? null : stats.dominantHue;
+  const profile = sourceProfile(stats);
+  const baseHues = profile.mono > 0.8 ? null : stats.dominantHues;
 
   // 掃引で分かった「その画像では成立しない型」を最初から出さない（スロットの無駄を減らす）:
   //  ・単色は暗い/平坦な写真では成立しない（ベタか灰色の面になる）
@@ -517,9 +632,14 @@ export function generateCandidates(
   const allowNeutral = allowDarkPaper;
 
   // カテゴリ配分（彩度で変える）。mono は単色/サプライズ多め、color はデュオ/トリオ多め。
-  const mix = stats.mono
-    ? { curated: 0.18, duo: 0.22, tri: 0.08, single: 0.28, surprise: 0.24 }
-    : { curated: 0.28, duo: 0.34, tri: 0.16, single: 0.1, surprise: 0.12 };
+  const monoMix = { curated: 0.18, duo: 0.22, tri: 0.08, single: 0.28, surprise: 0.24 };
+  const colorMix = { curated: 0.28, duo: 0.34, tri: 0.16, single: 0.1, surprise: 0.12 };
+  const mix = Object.fromEntries(
+    Object.keys(colorMix).map((key) => {
+      const k = key as keyof typeof colorMix;
+      return [k, colorMix[k] * (1 - profile.mono) + monoMix[k] * profile.mono];
+    }),
+  ) as typeof colorMix;
 
   const nCurated = Math.round(count * mix.curated);
   let nDuo = Math.round(count * mix.duo);
@@ -546,7 +666,7 @@ export function generateCandidates(
   const nameOf = (inks: PoolInk[]) => inks.map((p) => p.color.name).join(" + ");
   // デュオ（ハーモニー）
   for (let i = 0; i < nDuo; i++) {
-    const inks = pickHarmony(rng, VIVID, 2, baseHue);
+    const inks = pickHarmony(rng, VIVID, 2, baseHues);
     out.push(makeCandidate(rng, stats, "duo", nameOf(inks), inks.map((p) => p.color)));
   }
   // トリオ。1/3 は「黒 + 有彩色2色」にする（リソの定番だが、有彩色プールだけからは
@@ -554,8 +674,8 @@ export function generateCandidates(
   for (let i = 0; i < nTri; i++) {
     const inks =
       allowNeutral && rng() < 0.35
-        ? [...pickHarmony(rng, VIVID, 2, baseHue), pick(rng, NEUTRAL)]
-        : pickHarmony(rng, VIVID, 3, baseHue);
+        ? [...pickHarmony(rng, VIVID, 2, baseHues), pick(rng, NEUTRAL)]
+        : pickHarmony(rng, VIVID, 3, baseHues);
     out.push(makeCandidate(rng, stats, "tri", nameOf(inks), inks.map((p) => p.color)));
   }
   // 単色（蛍光 or 暗色 or 支配色相の近く）。明るいインクはクリーム紙だと消えるので、
@@ -564,7 +684,8 @@ export function generateCandidates(
     let usePool = rng() < 0.5 ? FLUOR : rng() < 0.5 ? VIVID : DARK;
     // 黒紙へ回せない画像では、そもそも明るすぎるインクを引かない
     if (!allowDarkPaper) usePool = usePool.filter((p) => p.L <= 75);
-    const ink = pickNearHue(rng, usePool.length ? usePool : VIVID, baseHue, new Set());
+    const sourceHue = baseHues?.length ? pick(rng, baseHues) : null;
+    const ink = pickNearHue(rng, usePool.length ? usePool : VIVID, sourceHue, new Set());
     const tooLight = allowDarkPaper && ink.L > 75;
     out.push(
       makeCandidate(
@@ -581,7 +702,7 @@ export function generateCandidates(
   // 色が出ないので、ここだけは高い側に固定する。
   for (let i = 0; i < nSurprise; i++) {
     const n = rng() < 0.6 ? 1 : 2;
-    const inks = pickHarmony(rng, n === 1 ? [...FLUOR, ...LIGHT] : FLUOR, n, baseHue);
+    const inks = pickHarmony(rng, n === 1 ? [...FLUOR, ...LIGHT] : FLUOR, n, baseHues);
     out.push(
       makeCandidate(rng, stats, "surprise", nameOf(inks) + " · black paper", inks.map((p) => p.color), {
         paperColor: PAPER_DARK,
@@ -590,7 +711,9 @@ export function generateCandidates(
       }),
     );
   }
-  return out;
+  // プリセットを含め、近すぎるインクを複数版として提案しない。候補数を埋めるための
+  // 代替生成は行わず、良い組み合わせが少ない場合はそのまま少なく返す。
+  return out.filter((candidate) => !hasNearDuplicateInks(candidate.colors));
 }
 
 /** SIMILAR strip 用の「base からの差」の格子（近い順）。重複なく系統的に振るのに使う。 */
@@ -663,7 +786,13 @@ export function mutate(base: Candidate, seed: number, count = 24): Candidate[] {
       const near = isNeutralInk(base.colors[idx])
         ? NEUTRAL.filter((p) => p.color.color !== base.colors[idx].color)
         : pool.filter(
-            (p) => p.color.color !== base.colors[idx].color && hueDist(p.hue, cur.hue) < 40,
+            (p) =>
+              p.color.color !== base.colors[idx].color &&
+              hueDist(p.hue, cur.hue) < 40 &&
+              !hasNearDuplicateInks([
+                ...base.colors.filter((_, j) => j !== idx),
+                p.color,
+              ]),
           );
       if (near.length) {
         const repl = near[Math.floor(rng() * near.length)];
@@ -677,7 +806,11 @@ export function mutate(base: Candidate, seed: number, count = 24): Candidate[] {
     }
     if (base.colors.length < 3) {
       const used = new Set(base.colors.map((c) => c.color));
-      const avail = pool.filter((p) => !used.has(p.color.color));
+      const avail = pool.filter(
+        (p) =>
+          !used.has(p.color.color) &&
+          !hasNearDuplicateInks([...base.colors, p.color]),
+      );
       if (avail.length) return [...base.colors, avail[Math.floor(rng() * avail.length)].color];
     }
     return base.colors;
@@ -707,7 +840,11 @@ export function mutate(base: Candidate, seed: number, count = 24): Candidate[] {
       const opacityShift = round === 0 ? 0 : round % 2 === 1 ? 0.1 : -0.1;
       inkOpacity = clamp(0.6, 0.95, roundTo(0.05, base.inkOpacity + opacityShift));
       // 格子を 1 周した後は、点設定と色の組み合わせも見せる
-      if (round > 0 && gridSlot % 3 === 0) colors = shiftColors(gridSlot % 3);
+      if (round > 0 && gridSlot % 3 === 0) {
+        // 条件が gridSlot % 3 === 0 なので、その値をそのままkindへ渡すと
+        // 永遠に「同系色へ置換」しか起きない。周回数で置換・削除・追加を循環させる。
+        colors = shiftColors(Math.floor(gridSlot / 3) % 3);
+      }
     }
 
     out.push({
@@ -721,7 +858,7 @@ export function mutate(base: Candidate, seed: number, count = 24): Candidate[] {
       inkOpacity,
     });
   }
-  return out;
+  return out.filter((candidate) => !hasNearDuplicateInks(candidate.colors));
 }
 
 // ---------------------------------------------------------------------------
@@ -755,6 +892,52 @@ function pearson(a: number[], b: number[]): number {
   return da <= 0 || db <= 0 ? 0 : num / Math.sqrt(da * db);
 }
 
+export interface RenderScore {
+  distinction: number;
+  variation: number;
+  /** 隣接セル間の差の相関。大域的な明暗だけでなく輪郭が残っているかを見る。 */
+  edgeRetention: number;
+  /** 出力のL* 10–90パーセンタイル幅。ほぼ一色への潰れを検出する。 */
+  tonalRange: number;
+  /** 元画像の明度レンジに対して、出力側に残ったレンジの割合。 */
+  rangeRetention: number;
+}
+
+export type RenderFingerprint = Float32Array;
+
+function labDistance(a: readonly number[], b: readonly number[]): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
+/** 表示前の知覚重複判定に使う、小さな空間Labフィンガープリント。 */
+export function renderFingerprint(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+  cells = 8,
+): RenderFingerprint {
+  const lab = downsampleLab(pixels, width, height, cells);
+  const out = new Float32Array(lab.length * 3);
+  for (let i = 0; i < lab.length; i++) {
+    out[i * 3] = lab[i][0];
+    out[i * 3 + 1] = lab[i][1];
+    out[i * 3 + 2] = lab[i][2];
+  }
+  return out;
+}
+
+/** 対応する空間セル同士の平均Delta E。小さいほど画面全体が同じに見える。 */
+export function fingerprintDistance(a: RenderFingerprint, b: RenderFingerprint): number {
+  const cells = Math.floor(Math.min(a.length, b.length) / 3);
+  if (!cells) return Number.POSITIVE_INFINITY;
+  let sum = 0;
+  for (let i = 0; i < cells; i++) {
+    const o = i * 3;
+    sum += Math.hypot(a[o] - b[o], a[o + 1] - b[o + 1], a[o + 2] - b[o + 2]);
+  }
+  return sum / cells;
+}
+
 export function scoreRender(
   srcPx: Uint8ClampedArray,
   rendPx: Uint8ClampedArray,
@@ -764,7 +947,7 @@ export function scoreRender(
   // 同じくらいだと点のノイズがそのまま採点に乗り、コントラストの低い写真では
   // 相関がノイズに埋もれて候補が軒並み足切りされる。セル幅は 4px 以上を保つ。
   cells = Math.min(40, Math.floor(w / 4)),
-): { distinction: number; variation: number } {
+): RenderScore {
   const src = downsampleLab(srcPx, w, h, cells);
   const rend = downsampleLab(rendPx, w, h, cells);
   const n = Math.min(src.length, rend.length);
@@ -778,8 +961,44 @@ export function scoreRender(
     const rd = Math.hypot(rend[i][0] - rend[j][0], rend[i][1] - rend[j][1], rend[i][2] - rend[j][2]);
     A.push(sd); B.push(rd); variationSum += rd; vc++;
   }
+  const gridW = cells;
+  const gridH = Math.max(1, Math.round((h / w) * cells));
+  const srcEdges: number[] = [];
+  const rendEdges: number[] = [];
+  for (let y = 0; y < gridH; y++) {
+    for (let x = 0; x < gridW; x++) {
+      const i = y * gridW + x;
+      if (x + 1 < gridW) {
+        srcEdges.push(labDistance(src[i], src[i + 1]));
+        rendEdges.push(labDistance(rend[i], rend[i + 1]));
+      }
+      if (y + 1 < gridH) {
+        srcEdges.push(labDistance(src[i], src[i + gridW]));
+        rendEdges.push(labDistance(rend[i], rend[i + gridW]));
+      }
+    }
+  }
+  const srcL = src.map((v) => v[0]).sort((a, b) => a - b);
+  const rendL = rend.map((v) => v[0]).sort((a, b) => a - b);
+  const q = (values: number[], p: number) => values.length
+    ? values[Math.min(values.length - 1, Math.floor((values.length - 1) * p))]
+    : 0;
+  const srcRange = q(srcL, 0.9) - q(srcL, 0.1);
+  const tonalRange = q(rendL, 0.9) - q(rendL, 0.1);
   return {
     distinction: Math.max(0, pearson(A, B)),
     variation: vc ? variationSum / vc : 0,
+    edgeRetention: Math.max(0, pearson(srcEdges, rendEdges)),
+    tonalRange,
+    rangeRetention: srcRange > 1 ? clamp(0, 1.5, tonalRange / srcRange) : 1,
   };
+}
+
+/** 足切り通過後の候補を並べる品質値。特定の作風を決めず、情報保持だけを評価する。 */
+export function renderQualityScore(score: RenderScore): number {
+  const distinction = clamp(0, 1, (score.distinction - MIN_DISTINCTION) / 0.4);
+  const variation = clamp(0, 1, (score.variation - MIN_VARIATION) / 20);
+  const edge = clamp(0, 1, score.edgeRetention);
+  const range = clamp(0, 1, score.rangeRetention / 0.75);
+  return distinction * 0.45 + edge * 0.25 + variation * 0.15 + range * 0.15;
 }
