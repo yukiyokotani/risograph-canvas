@@ -258,7 +258,7 @@ const guide = {
       },
       {
         heading: "Paper",
-        body: "Set the paper color and choose a preset paper shape. Original (Photo) keeps the source image's dimensions; the other presets add paper around the uncropped, centered photo. Photo margin sets the minimum even border, measured against the photo's shorter edge. Texture adds a paper surface — Felt or Fiber — with adjustable strength. Enable Transparent to drop the paper entirely: only the ink remains, exported over a transparent background.",
+        body: "Set the paper color and choose a preset paper shape. Original (Photo) keeps the source image's aspect ratio; the other presets use a fixed paper shape around the uncropped, centered photo. Photo margin shrinks the photo inside that fixed output size, setting the minimum border from the photo's shorter edge. Texture adds a paper surface — Felt or Fiber — with adjustable strength. Enable Transparent to drop the paper entirely: only the ink remains, exported over a transparent background.",
       },
       {
         heading: "Ink Colors",
@@ -323,7 +323,7 @@ const guide = {
       },
       {
         heading: "用紙 (Paper)",
-        body: "用紙色と縦横比プリセットを選びます。「Original (Photo)」は元写真の形状を維持し、それ以外では写真を切り抜かず中央へ配置して周囲に用紙を足します。Photo margin は写真の短辺を基準に、四辺の最小余白を設定します。Texture は紙の地合い（Felt / Fiber）を強さ付きで加えます。「Transparent」を有効にすると用紙を無くし、インクだけを透明背景の上に書き出せます。",
+        body: "用紙色と縦横比プリセットを選びます。「Original (Photo)」は元写真の縦横比を維持し、それ以外では固定した用紙形状の中央へ写真を切り抜かず配置します。Photo margin は出力サイズを変えず、写真側を縮小して短辺基準の最小余白を設定します。Texture は紙の地合い（Felt / Fiber）を強さ付きで加えます。「Transparent」を有効にすると用紙を無くし、インクだけを透明背景の上に書き出せます。",
       },
       {
         heading: "インクカラー (Ink Colors)",

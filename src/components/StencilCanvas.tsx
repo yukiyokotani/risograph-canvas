@@ -40,7 +40,7 @@ export interface StencilCanvasProps {
   highlightCutoff?: number;
   paperTexture?: PaperTexture;
   paperTextureAmount?: number;
-  /** 写真の短辺に対する四辺の用紙余白（0–0.5） */
+  /** 固定した用紙内で、写真の短辺を基準に写真を縮小して作る余白（0–0.5） */
   paperMargin?: number;
   /** 用紙の固定縦横比。省略時は写真の形状を基準にする。 */
   paperAspect?: number;
